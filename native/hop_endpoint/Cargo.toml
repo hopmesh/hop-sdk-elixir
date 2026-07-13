@@ -1,0 +1,16 @@
+[package]
+name = "hop_endpoint"
+version = "0.0.1"
+edition = "2021"
+publish = false
+license-file = "../../../../LICENSE.md"
+
+[lib]
+name = "hop_endpoint"
+crate-type = ["cdylib"]
+
+[dependencies]
+rustler = "0.36"
+hop = { path = "../../../../core/hop" }
+
+[workspace]

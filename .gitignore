@@ -1,0 +1,8 @@
+/_build/
+/deps/
+/cover/
+erl_crash.dump
+*.ez
+# Rustler NIF build output
+/priv/native/
+native/*/target/
