@@ -40,7 +40,7 @@ defmodule Hop.Endpoint do
 
   @doc "Call a service on a remote endpoint. Blocks until the response returns (delay-tolerant)."
   def request(pid, dst, service, method, args \\ "", timeout \\ 15_000) do
-    GenServer.call(pid, {:request, dst, service, method, args}, timeout + 1_000)
+    GenServer.call(pid, {:request, dst, service, method, args, timeout}, timeout + 1_000)
   end
 
   def close(pid), do: GenServer.stop(pid)
@@ -112,9 +112,21 @@ defmodule Hop.Endpoint do
     {:reply, :ok, %{st | links: Map.put(st.links, link, send_fun)}}
   end
 
-  def handle_call({:request, dst, service, method, args}, from, st) do
-    req_id = Native.send_service_request(st.node, to_addr(dst), service, method, to_bin(args))
-    {:noreply, %{st | pending: Map.put(st.pending, req_id, from)}}
+  def handle_call({:request, dst, service, method, args, timeout}, from, st) do
+    case try_send_request(st.node, dst, service, method, args) do
+      {:ok, req_id} ->
+        # Stamp the waiter with the CALLER's own deadline (monotonic, so an NTP step can't prune it
+        # early), so the pump prunes it exactly when the caller's GenServer.call timeout has fired -
+        # never before (audit LOW: a fixed 300s TTL dropped a still-valid waiter of a >300s-timeout
+        # caller, and a leaked entry would grow st.pending unboundedly).
+        deadline = System.monotonic_time(:millisecond) + timeout + 1_000
+        {:noreply, %{st | pending: Map.put(st.pending, req_id, {from, deadline})}}
+
+      {:error, reason} ->
+        # A send that raises in the NIF must fail ONLY this caller, not crash the endpoint GenServer
+        # and take down every other in-flight caller with it (audit LOW: fault-isolation break).
+        {:reply, {:error, reason}, st}
+    end
   end
 
   @impl true
@@ -171,16 +183,36 @@ defmodule Hop.Endpoint do
           nil ->
             acc
 
-          caller ->
+          {caller, _ts} ->
             GenServer.reply(caller, {:ok, status, body})
             %{acc | pending: Map.delete(acc.pending, for_id)}
         end
       end)
 
-    {:noreply, st}
+    # Prune waiters past their caller's deadline (audit LOW: bounds st.pending so a timed-out caller's
+    # entry can't leak it), using monotonic time so the deadline comparison is NTP-immune.
+    now_mono = System.monotonic_time(:millisecond)
+    pending = for {rid, {c, dl}} <- st.pending, dl > now_mono, into: %{}, do: {rid, {c, dl}}
+
+    {:noreply, %{st | pending: pending}}
+  end
+
+  @impl true
+  def terminate(_reason, st) do
+    # Unblock any in-flight callers on close so they fail fast instead of waiting out their call timeout.
+    for {_rid, {caller, _ts}} <- st.pending, do: GenServer.reply(caller, {:error, :closed})
+    :ok
   end
 
   # ---- helpers ----
+  # Send a service request, converting a raising NIF error (e.g. an unsealable dst) into a value so one
+  # caller's bad input can't crash the endpoint GenServer and every other in-flight caller with it.
+  defp try_send_request(node, dst, service, method, args) do
+    {:ok, Native.send_service_request(node, to_addr(dst), service, method, to_bin(args))}
+  rescue
+    e -> {:error, Exception.message(e)}
+  end
+
   defp now, do: System.system_time(:millisecond)
   defp to_bin(b) when is_binary(b), do: b
   defp to_bin(other), do: :erlang.term_to_binary(other)
