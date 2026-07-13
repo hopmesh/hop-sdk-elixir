@@ -39,8 +39,18 @@ compiler builds the NIF crate on first `mix` run:
 cd sdk/elixir
 mise trust
 mise exec -- mix deps.get
-mise exec -- mix test                    # round trips + reach record + WSS discovery, must pass
-mise exec -- mix run examples/echo.exs   # the DX end to end
+mise exec -- mix test                             # round trips + reach record + WSS discovery, must pass
+mise exec -- mix run examples/raw_roundtrip.exs   # raw C ABI round trip (Hop.Native)
+mise exec -- mix run examples/echo.exs            # the DX in-process
+mise exec -- mix run examples/tcp.exs             # the same round trip over a real TCP bearer
+mise exec -- mix run examples/discovery.exs       # WSS + WebPKI + reach-record discovery (in-process cert)
+```
+
+Two-process shape (a standalone server + a client that dials it):
+
+```sh
+mise exec -- mix run examples/server.exs                          # prints its address, listens on 9944
+mise exec -- mix run examples/client.exs <address> localhost 9944
 ```
 
 ## Reachable by name (WSS + discovery)
