@@ -1,7 +1,14 @@
 defmodule Hop.Request do
   @moduledoc "An inbound service request. `from` is the cryptographically verified sender identity."
   defstruct [:from, :from_bytes, :service, :method, :args]
-  @type t :: %__MODULE__{from: String.t(), from_bytes: binary(), service: String.t(), method: String.t(), args: binary()}
+
+  @type t :: %__MODULE__{
+          from: String.t(),
+          from_bytes: binary(),
+          service: String.t(),
+          method: String.t(),
+          args: binary()
+        }
 end
 
 defmodule Hop.Endpoint do
@@ -39,7 +46,8 @@ defmodule Hop.Endpoint do
   def close(pid), do: GenServer.stop(pid)
 
   @doc "Sign a self-certifying reachability record for this endpoint's address bound to `endpoint`."
-  def sign_reach(pid, endpoint, ttl_secs \\ 3600), do: GenServer.call(pid, {:sign_reach, endpoint, ttl_secs})
+  def sign_reach(pid, endpoint, ttl_secs \\ 3600),
+    do: GenServer.call(pid, {:sign_reach, endpoint, ttl_secs})
 
   @doc """
   Wire this endpoint into an HTTPS server IN ONE CALL: the WSS bearer at /_hop and the /.well-known/hop
@@ -56,13 +64,20 @@ defmodule Hop.Endpoint do
   """
   def dial_by_name(pid, base_url, opts \\ []) do
     {address, wss_url} = Hop.Discovery.resolve(base_url, opts)
-    ssl_opts = if Keyword.get(opts, :insecure_tls, false), do: [verify: :verify_none], else: [verify: :verify_peer, cacerts: :public_key.cacerts_get()]
+
+    ssl_opts =
+      if Keyword.get(opts, :insecure_tls, false),
+        do: [verify: :verify_none],
+        else: [verify: :verify_peer, cacerts: :public_key.cacerts_get()]
+
     {:ok, _sock} = Hop.WssBearer.dial(pid, wss_url, ssl_opts)
     address
   end
 
   # ---- bearer seam (used by Hop.TcpBearer) ----
-  def register_link(pid, link, role, send_fun), do: GenServer.call(pid, {:register_link, link, role, send_fun})
+  def register_link(pid, link, role, send_fun),
+    do: GenServer.call(pid, {:register_link, link, role, send_fun})
+
   def deliver(pid, link, bytes), do: GenServer.cast(pid, {:deliver, link, bytes})
   def link_down(pid, link), do: GenServer.cast(pid, {:link_down, link})
 
@@ -132,18 +147,33 @@ defmodule Hop.Endpoint do
           :ok
 
         fun ->
-          req = %Hop.Request{from: Native.to_b58(from), from_bytes: from, service: service, method: method, args: args}
-          reply = fn status, body -> Native.send_service_response(st.node, from, req_id, status, to_bin(body)) end
+          req = %Hop.Request{
+            from: Native.to_b58(from),
+            from_bytes: from,
+            service: service,
+            method: method,
+            args: args
+          }
+
+          reply = fn status, body ->
+            Native.send_service_response(st.node, from, req_id, status, to_bin(body))
+          end
+
           fun.(req, reply)
       end
     end
 
     # inbound responses -> resolve pending callers
     st =
-      Enum.reduce(Native.take_service_responses(st.node), st, fn {_from, for_id, status, body}, acc ->
+      Enum.reduce(Native.take_service_responses(st.node), st, fn {_from, for_id, status, body},
+                                                                 acc ->
         case acc.pending[for_id] do
-          nil -> acc
-          caller -> GenServer.reply(caller, {:ok, status, body}); %{acc | pending: Map.delete(acc.pending, for_id)}
+          nil ->
+            acc
+
+          caller ->
+            GenServer.reply(caller, {:ok, status, body})
+            %{acc | pending: Map.delete(acc.pending, for_id)}
         end
       end)
 

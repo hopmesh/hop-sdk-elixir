@@ -25,7 +25,10 @@ defmodule Hop.Discovery do
     body = https_get(host, port || 443, @well_known_path, Keyword.get(opts, :insecure_tls, false))
     j = Jason.decode!(body)
     rec = Base.decode64!(j["reach"])
-    {valid, address, endpoint, _issued, _ttl} = Hop.Native.verify_reach_record(rec, System.system_time(:second))
+
+    {valid, address, endpoint, _issued, _ttl} =
+      Hop.Native.verify_reach_record(rec, System.system_time(:second))
+
     unless valid, do: raise("reach record failed verification (bad signature or expired)")
     {Hop.Native.to_b58(address), endpoint}
   end
@@ -36,7 +39,9 @@ defmodule Hop.Discovery do
         do: [verify: :verify_none],
         else: [verify: :verify_peer, cacerts: :public_key.cacerts_get()]
 
-    {:ok, sock} = :ssl.connect(String.to_charlist(host), port, [:binary, {:active, false} | ssl_opts])
+    {:ok, sock} =
+      :ssl.connect(String.to_charlist(host), port, [:binary, {:active, false} | ssl_opts])
+
     :ssl.send(sock, "GET #{path} HTTP/1.1\r\nHost: #{host}\r\nConnection: close\r\n\r\n")
     body = recv_all(sock, "") |> extract_body()
     :ssl.close(sock)

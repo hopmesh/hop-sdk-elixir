@@ -17,7 +17,12 @@ defmodule Hop.TcpBearer do
   def dial(endpoint, host, port) do
     {:ok, sock} = :gen_tcp.connect(to_charlist(host), port, @opts)
     link = new_link()
-    :ok = Hop.Endpoint.register_link(endpoint, link, :dialer, fn bytes -> :gen_tcp.send(sock, bytes) end)
+
+    :ok =
+      Hop.Endpoint.register_link(endpoint, link, :dialer, fn bytes ->
+        :gen_tcp.send(sock, bytes)
+      end)
+
     spawn_link(fn -> recv_loop(endpoint, sock, link) end)
     {:ok, sock}
   end
@@ -25,7 +30,12 @@ defmodule Hop.TcpBearer do
   defp accept_loop(endpoint, lsock) do
     {:ok, sock} = :gen_tcp.accept(lsock)
     link = new_link()
-    :ok = Hop.Endpoint.register_link(endpoint, link, :acceptor, fn bytes -> :gen_tcp.send(sock, bytes) end)
+
+    :ok =
+      Hop.Endpoint.register_link(endpoint, link, :acceptor, fn bytes ->
+        :gen_tcp.send(sock, bytes)
+      end)
+
     spawn_link(fn -> recv_loop(endpoint, sock, link) end)
     accept_loop(endpoint, lsock)
   end

@@ -65,7 +65,9 @@ defmodule Hop.WssBearer do
         :ssl.close(sock)
     end
   rescue
-    _ -> (:ssl.close(sock); :ok)
+    _ ->
+      :ssl.close(sock)
+      :ok
   end
 
   defp read_http(sock, req_line, headers) do
@@ -73,11 +75,20 @@ defmodule Hop.WssBearer do
     line = String.trim_trailing(raw, "\r\n")
 
     cond do
-      line == "" -> {parse_req_line(req_line), headers}
-      req_line == nil -> read_http(sock, line, headers)
+      line == "" ->
+        {parse_req_line(req_line), headers}
+
+      req_line == nil ->
+        read_http(sock, line, headers)
+
       true ->
         [k, v] = String.split(line, ":", parts: 2)
-        read_http(sock, req_line, Map.put(headers, k |> String.trim() |> String.downcase(), String.trim(v)))
+
+        read_http(
+          sock,
+          req_line,
+          Map.put(headers, k |> String.trim() |> String.downcase(), String.trim(v))
+        )
     end
   end
 
@@ -89,7 +100,10 @@ defmodule Hop.WssBearer do
   # ---- client ----
   def dial(endpoint, wss_url, ssl_opts) do
     %URI{host: host, port: port, path: path} = URI.parse(wss_url)
-    {:ok, sock} = :ssl.connect(String.to_charlist(host), port || 443, [:binary, {:active, false} | ssl_opts])
+
+    {:ok, sock} =
+      :ssl.connect(String.to_charlist(host), port || 443, [:binary, {:active, false} | ssl_opts])
+
     key = Base.encode64(:crypto.strong_rand_bytes(16))
 
     :ssl.send(sock, [
@@ -119,7 +133,11 @@ defmodule Hop.WssBearer do
   # ---- link + framing ----
   defp run_link(endpoint, sock, role, mask?) do
     link = System.unique_integer([:positive, :monotonic]) + 60_000
-    Hop.Endpoint.register_link(endpoint, link, role, fn buf -> :ssl.send(sock, encode_frame(buf, mask?)) end)
+
+    Hop.Endpoint.register_link(endpoint, link, role, fn buf ->
+      :ssl.send(sock, encode_frame(buf, mask?))
+    end)
+
     loop_frames(endpoint, sock, link)
   end
 

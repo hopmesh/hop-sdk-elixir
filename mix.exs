@@ -7,7 +7,8 @@ defmodule Hop.MixProject do
       version: "0.0.1",
       elixir: "~> 1.15",
       deps: deps(),
-      description: "Receive Hop messages in Elixir: an embeddable endpoint over hop-core via Rustler."
+      description:
+        "Receive Hop messages in Elixir: an embeddable endpoint over hop-core via Rustler."
     ]
   end
 

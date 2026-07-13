@@ -23,7 +23,9 @@ defmodule Hop.EndpointTest do
     {:ok, _} = Hop.TcpBearer.listen(server, port)
     {:ok, client} = Hop.Endpoint.start_link([])
     {:ok, _} = Hop.TcpBearer.dial(client, "localhost", port)
-    assert {:ok, 200, "ok"} = Hop.Endpoint.request(client, Hop.Endpoint.address(server), "svc", "m", "x")
+
+    assert {:ok, 200, "ok"} =
+             Hop.Endpoint.request(client, Hop.Endpoint.address(server), "svc", "m", "x")
 
     # Close the server while its accepted recv_loop and the client's socket are still live. Unlike the
     # C-FFI SDKs, Elixir needs no guard: the node is only ever touched inside the GenServer, a bearer
