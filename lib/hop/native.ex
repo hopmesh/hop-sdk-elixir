@@ -23,6 +23,9 @@ defmodule Hop.Native do
   def take_service_responses(_node), do: err()
   def to_b58(_addr), do: err()
   def from_b58(_text), do: err()
+  def sign_reach_record(_node, _endpoint, _ttl_secs), do: err()
+  # -> {valid, address, endpoint, issued_at, ttl_secs}
+  def verify_reach_record(_bytes, _now_secs), do: err()
 
   defp err, do: :erlang.nif_error(:nif_not_loaded)
 end

@@ -38,6 +38,29 @@ defmodule Hop.Endpoint do
 
   def close(pid), do: GenServer.stop(pid)
 
+  @doc "Sign a self-certifying reachability record for this endpoint's address bound to `endpoint`."
+  def sign_reach(pid, endpoint, ttl_secs \\ 3600), do: GenServer.call(pid, {:sign_reach, endpoint, ttl_secs})
+
+  @doc """
+  Wire this endpoint into an HTTPS server IN ONE CALL: the WSS bearer at /_hop and the /.well-known/hop
+  discovery responder, on `port` with `ssl_opts` (an `:ssl` server config). `public_url` is where
+  senders reach it, e.g. "wss://myaddress.com/_hop". Returns the listen socket.
+  """
+  def attach(pid, port, ssl_opts, public_url, ttl_secs \\ 3600) do
+    Hop.WssBearer.listen(pid, port, ssl_opts, public_url, ttl_secs)
+  end
+
+  @doc """
+  Resolve a base HTTPS URL to a verified endpoint, dial its WSS, and return the reachable address
+  (then use request/6). `insecure_tls: true` only for a dev/self-signed cert.
+  """
+  def dial_by_name(pid, base_url, opts \\ []) do
+    {address, wss_url} = Hop.Discovery.resolve(base_url, opts)
+    ssl_opts = if Keyword.get(opts, :insecure_tls, false), do: [verify: :verify_none], else: [verify: :verify_peer, cacerts: :public_key.cacerts_get()]
+    {:ok, _sock} = Hop.WssBearer.dial(pid, wss_url, ssl_opts)
+    address
+  end
+
   # ---- bearer seam (used by Hop.TcpBearer) ----
   def register_link(pid, link, role, send_fun), do: GenServer.call(pid, {:register_link, link, role, send_fun})
   def deliver(pid, link, bytes), do: GenServer.cast(pid, {:deliver, link, bytes})
@@ -65,6 +88,9 @@ defmodule Hop.Endpoint do
   end
 
   def handle_call(:address, _from, st), do: {:reply, Native.to_b58(Native.address(st.node)), st}
+
+  def handle_call({:sign_reach, endpoint, ttl}, _from, st),
+    do: {:reply, Native.sign_reach_record(st.node, endpoint, ttl), st}
 
   def handle_call({:register_link, link, role, send_fun}, _from, st) do
     Native.connected(st.node, link, role == :dialer)

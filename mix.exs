@@ -11,7 +11,8 @@ defmodule Hop.MixProject do
     ]
   end
 
-  def application, do: [extra_applications: [:logger]]
+  # :ssl (with :public_key + :crypto) powers the WSS bearer + discovery; no third-party WS deps.
+  def application, do: [extra_applications: [:logger, :ssl, :public_key, :inets]]
 
-  defp deps, do: [{:rustler, "~> 0.36.0"}]
+  defp deps, do: [{:rustler, "~> 0.36.0"}, {:jason, "~> 1.4"}]
 end

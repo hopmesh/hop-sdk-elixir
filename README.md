@@ -39,12 +39,31 @@ compiler builds the NIF crate on first `mix` run:
 cd sdk/elixir
 mise trust
 mise exec -- mix deps.get
-mise exec -- mix test                    # hops:// round trip over a real TCP bearer, must pass
+mise exec -- mix test                    # round trips + reach record + WSS discovery, must pass
 mise exec -- mix run examples/echo.exs   # the DX end to end
 ```
 
+## Reachable by name (WSS + discovery)
+
+Make an endpoint reachable at `myaddress.com` with **no new port and no DNSSEC**, using a WSS bearer
+over Erlang's built-in `:ssl` (no WS hex deps):
+
+```elixir
+{:ok, _} = Hop.Endpoint.attach(ep, 443, [certfile: cert, keyfile: key], "wss://myaddress.com/_hop")
+```
+
+```elixir
+address = Hop.Endpoint.dial_by_name(client, "https://myaddress.com")
+{:ok, 201, body} = Hop.Endpoint.request(client, address, "acme/orders", "create", order)
+```
+
+Trust, no DNSSEC: `dial_by_name` fetches `/.well-known/hop` (TLS proves the domain), verifies the
+self-certifying reach record (signed by the address), dials the WSS, and the Noise handshake confirms
+the address. `test/discovery_test.exs` proves the full chain against a self-signed HTTPS server.
+
 ## Prototype scope
 
-Built and working: `hop.on` / `reply` / `request`, the GenServer pump, the TCP bearer, base58
-addressing. Stubbed follow-ups (each additive, none a core change): HNS publish/resolve, delegated
-endpoint keys, multi-tenant hosting. Not yet a required CI job. Design: `docs/endpoint-sdk.md`.
+Built and working: `hop.on` / `reply` / `request`, the GenServer pump, TCP + WSS bearers, base58
+addressing, reach records + `attach`/`dial_by_name` discovery. Follow-ups (each additive, none a core
+change): the no-domain gossip case, delegated endpoint keys, multi-tenant hosting. Not yet a required
+CI job. Design: `docs/endpoint-sdk.md`.

@@ -157,4 +157,16 @@ fn from_b58<'a>(env: Env<'a>, text: String) -> Binary<'a> {
     mkbin(env, &hop::address_from_base58(text))
 }
 
+#[rustler::nif]
+fn sign_reach_record<'a>(env: Env<'a>, node: ResourceArc<NodeRes>, endpoint: String, ttl_secs: u32) -> Binary<'a> {
+    mkbin(env, &node.0.sign_reach_record(endpoint, ttl_secs))
+}
+
+// Returns {valid, address, endpoint, issued_at, ttl_secs}. valid=false => the record is bad/expired.
+#[rustler::nif]
+fn verify_reach_record<'a>(env: Env<'a>, bytes: Binary, now_secs: u64) -> (bool, Binary<'a>, String, u64, u32) {
+    let info = hop::verify_reach_record(bytes.as_slice().to_vec(), now_secs);
+    (info.valid, mkbin(env, &info.address), info.endpoint, info.issued_at, info.ttl_secs)
+}
+
 rustler::init!("Elixir.Hop.Native");
