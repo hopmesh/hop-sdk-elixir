@@ -17,6 +17,8 @@ defmodule Hop.Native do
   def drain_outgoing(_node), do: err()
   def subscribe(_node, _topic), do: err()
   def publish_prekey(_node), do: err()
+  def cluster_join_passphrase(_node, _passphrase), do: err()
+  def cluster_members(_node), do: err()
   def send_service_request(_node, _dst, _service, _method, _args), do: err()
   def send_service_response(_node, _to, _for_id, _status, _body), do: err()
   def take_service_requests(_node), do: err()
