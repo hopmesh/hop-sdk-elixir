@@ -82,7 +82,7 @@ fn cluster_members(node: ResourceArc<NodeRes>) -> u32 {
 }
 
 // Require at least `min_live_members` live cluster members visible before this replica processes a
-// request (CP: hold-until-coordinated); a split cluster then holds rather than double-processes.
+// request using a TTL-based visibility threshold; this is not consensus or at-most-once.
 #[rustler::nif]
 fn cluster_quorum(node: ResourceArc<NodeRes>, min_live_members: u32) {
     node.0.cluster_quorum(min_live_members);

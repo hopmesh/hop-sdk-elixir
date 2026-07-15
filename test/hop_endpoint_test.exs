@@ -37,7 +37,7 @@ defmodule Hop.EndpointTest do
     Hop.Endpoint.close(client)
   end
 
-  test "joins a cluster and sets the CP quorum (DESIGN.md §40)" do
+  test "joins a cluster and sets the TTL visibility threshold" do
     # cluster join + quorum NIFs resolve and behave; the cross-replica dedup + hold are proven in the
     # Rust crate, here we exercise the Elixir surface (both are opts on start_link).
     {:ok, ep} = Hop.Endpoint.start_link(cluster: "shared-cluster-passphrase", quorum: 3)
