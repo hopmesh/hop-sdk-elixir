@@ -1,0 +1,50 @@
+# release: publish the hop package to Hex on a semver tag via `mix hex.publish`.
+#
+# Inert in the monorepo (root .github/workflows only). Copybara mirrors sdk/elixir to its
+# own repo, where mix.exs is at the repo root and this becomes the repo-root release
+# workflow.
+#
+# No native build step here: the Rustler NIF compiles on the consumer's machine at
+# install time (Hex publishes the source, not a prebuilt native library).
+name: release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+# Least privilege: we only read the checkout. Hex auth rides HEX_API_KEY.
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Elixir and OTP
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: '1.18'
+          otp-version: '27'
+
+      # Guard: the tag (minus its leading v) must equal mix.exs's project version, so a
+      # mistyped tag can never publish the wrong version. Read it without compiling.
+      - name: Verify tag matches mix version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          ver="$(sed -n 's/.*version: *"\([^"]*\)".*/\1/p' mix.exs | head -1)"
+          if [ "$tag" != "$ver" ]; then
+            echo "tag $tag does not match mix.exs version $ver" >&2
+            exit 1
+          fi
+
+      - name: Fetch dependencies
+        run: mix deps.get
+
+      - name: Publish to Hex
+        run: mix hex.publish --yes
+        env:
+          HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
