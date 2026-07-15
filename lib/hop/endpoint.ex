@@ -96,6 +96,10 @@ defmodule Hop.Endpoint do
     # Cluster with sibling replicas (same identity, no shared datastore) if a passphrase is given: dedup
     # then applies transparently to inbound requests. Interops with the service's HOP_CLUSTER_SECRET.
     if opts[:cluster], do: Native.cluster_join_passphrase(node, opts[:cluster])
+
+    # hold-until-coordinated (CP): require this many live members visible before processing, so a split
+    # cluster holds rather than double-processes. 0 or 1 disables the hold (the default).
+    if opts[:quorum], do: Native.cluster_quorum(node, opts[:quorum])
     {:ok, _} = :timer.send_interval(opts[:tick_ms] || 50, :pump)
     {:ok, %{node: node, handlers: %{}, links: %{}, pending: %{}}}
   end

@@ -36,4 +36,13 @@ defmodule Hop.EndpointTest do
     assert Process.alive?(client)
     Hop.Endpoint.close(client)
   end
+
+  test "joins a cluster and sets the CP quorum (DESIGN.md §40)" do
+    # cluster join + quorum NIFs resolve and behave; the cross-replica dedup + hold are proven in the
+    # Rust crate, here we exercise the Elixir surface (both are opts on start_link).
+    {:ok, ep} = Hop.Endpoint.start_link(cluster: "shared-cluster-passphrase", quorum: 3)
+    addr = Hop.Endpoint.address(ep)
+    assert is_binary(addr) and byte_size(addr) > 30
+    Hop.Endpoint.close(ep)
+  end
 end
