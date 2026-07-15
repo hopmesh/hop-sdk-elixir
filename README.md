@@ -55,7 +55,7 @@ mise exec -- mix run examples/client.exs <address> localhost 9944
 
 ## Reachable by name (WSS + discovery)
 
-Make an endpoint reachable at `myaddress.com` with **no new port and no DNSSEC**, using a WSS bearer
+Make an endpoint reachable at `myaddress.com` with **no new port**, using a WSS bearer
 over Erlang's built-in `:ssl` (no WS hex deps):
 
 ```elixir
@@ -67,7 +67,7 @@ address = Hop.Endpoint.dial_by_name(client, "https://myaddress.com")
 {:ok, 201, body} = Hop.Endpoint.request(client, address, "acme/orders", "create", order)
 ```
 
-Trust, no DNSSEC: `dial_by_name` fetches `/.well-known/hop` (TLS proves the domain), verifies the
+Trust: `dial_by_name` fetches `/.well-known/hop` (TLS proves the domain), verifies the
 self-certifying reach record (signed by the address), dials the WSS, and the Noise handshake confirms
 the address. `test/discovery_test.exs` proves the full chain against a self-signed HTTPS server.
 
