@@ -1,0 +1,41 @@
+[package]
+name = "hop-core"
+version.workspace = true
+edition.workspace = true
+license-file = "LICENSE.md"
+repository.workspace = true
+description = "Core protocol for Hop: bundles, crypto, store-and-forward, and routing."
+
+[dependencies]
+serde.workspace = true
+postcard.workspace = true
+blake3.workspace = true
+sha2 = { workspace = true, features = ["oid"] }
+ed25519-dalek.workspace = true
+x25519-dalek.workspace = true
+chacha20poly1305.workspace = true
+rand_core.workspace = true
+# ed25519-dalek 3 / x25519-dalek 3 need a `CryptoRng` from THEIR rand_core (0.10), which dropped
+# `OsRng` entirely. `getrandom::SysRng` (wrapped `UnwrapErr`-infallible) is the replacement the
+# dalek crates' own docs point at: same OS CSPRNG as the workspace `rand_core::OsRng` used
+# elsewhere in this crate, just reached through the newer entry point.
+getrandom = { version = "0.4", features = ["sys_rng"] }
+thiserror.workspace = true
+miniz_oxide.workspace = true
+snow.workspace = true
+# Encode/decode base58 Hop addresses (endpoint keys, session-store keys, human display).
+bs58 = "0.5"
+# Wipe secret key material (prekey secrets, retired prekeys) from memory on drop (F-08).
+zeroize = "1"
+
+# On wasm32 the `getrandom` 0.4 dependency above (used to satisfy the dalek crates' CryptoRng
+# bound) needs the browser crypto.getRandomValues backend selected explicitly, the same way
+# hop-wasm/Cargo.toml already does for its own (separate, older) getrandom 0.2 need. Without this,
+# `getrandom`'s default backend selection fails to build for wasm32-unknown-unknown at all.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.4", features = ["wasm_js"] }
+# snow 0.10 (bumped from 0.9) pulls its OWN `getrandom` for Noise ephemeral-key randomness, a
+# THIRD major version (0.3) alongside the 0.4 above and the 0.2 rand_core 0.6 still uses. Never
+# referenced directly from this crate's source; declared purely so Cargo's feature unification
+# flips on the wasm_js backend for whichever exact getrandom 0.3.x snow resolves to.
+getrandom-for-snow = { package = "getrandom", version = "0.3", features = ["wasm_js"] }

@@ -11,6 +11,4 @@ crate-type = ["cdylib"]
 
 [dependencies]
 rustler = "0.36"
-hop = { path = "../../../../core/hop" }
-
-[workspace]
+hop = { workspace = true }
