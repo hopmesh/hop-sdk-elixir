@@ -136,6 +136,8 @@ pub struct OutPacket {
 /// A decrypted message delivered to this node.
 #[cfg_attr(feature = "full", derive(uniffi::Record))]
 pub struct InboxMessage {
+    /// Stable bundle/inbox id. Hosts persist and deduplicate this before accepting the item.
+    pub id: Vec<u8>,
     /// Sender's hop address (Ed25519 public key).
     pub from: Vec<u8>,
     pub content_type: String,
@@ -188,6 +190,8 @@ pub struct ServiceReq {
 /// A service response sealed back to this node as a caller.
 #[cfg_attr(feature = "full", derive(uniffi::Record))]
 pub struct ServiceResp {
+    /// Stable response bundle id used for explicit durable acceptance.
+    pub id: Vec<u8>,
     pub from: Vec<u8>,
     pub for_request_id: Vec<u8>,
     pub status: u16,
@@ -230,6 +234,8 @@ pub struct HttpReq {
 /// An HTTP response sealed back to the requester.
 #[cfg_attr(feature = "full", derive(uniffi::Record))]
 pub struct HttpResp {
+    /// Stable response bundle id used for explicit durable acceptance.
+    pub id: Vec<u8>,
     pub from: Vec<u8>,
     pub for_request_id: Vec<u8>,
     pub status: u16,
@@ -339,6 +345,8 @@ pub enum HpsVisibility {
 /// A received `hps://` message, after decryption + sender verification (DESIGN.md §32).
 #[cfg_attr(feature = "full", derive(uniffi::Record))]
 pub struct HpsMessage {
+    /// Stable authenticated publication id used for host deduplication and acceptance.
+    pub id: Vec<u8>,
     pub path: String,
     /// The verified sender's address (for a channel, the writer; for a service, the host).
     pub sender: Vec<u8>,
@@ -954,33 +962,38 @@ impl HopNode {
         }
     }
 
-    /// Drain decrypted messages addressed to this node since the last call. Handles
-    /// both static-sealed and forward-secret session messages uniformly.
+    /// Poll decrypted messages awaiting host acceptance. This is non-destructive: the same stable
+    /// ids are returned after a crash or repeated call until [`Self::accept_inbox`] succeeds.
     pub fn take_inbox(&self) -> Vec<InboxMessage> {
-        let mut node = self.node();
-        let bundles = node.take_inbox();
-        bundles
-            .iter()
-            .filter_map(|b| match node.read_message(b) {
-                Ok(Some(m)) => Some(InboxMessage {
-                    from: m.from.to_vec(),
-                    content_type: m.content_type,
-                    body: m.body,
-                    hops: b.env.hops,
-                    created_at: b.inner.created_at,
-                    // Structured hops so the app can resolve each forwarder to a name.
-                    trace: b
-                        .trace()
-                        .iter()
-                        .map(|h| TraceHopInfo {
-                            node: h.node.to_vec(),
-                            app_label: label_app(&h.app),
-                        })
-                        .collect(),
-                }),
-                _ => None,
+        self.node()
+            .inbox_items()
+            .into_iter()
+            .map(|item| InboxMessage {
+                id: item.id.to_vec(),
+                from: item.from.to_vec(),
+                content_type: item.content_type,
+                body: item.body,
+                hops: item.hops,
+                created_at: item.created_at,
+                trace: item
+                    .trace
+                    .iter()
+                    .map(|hop| TraceHopInfo {
+                        node: hop.node.to_vec(),
+                        app_label: label_app(&hop.app),
+                    })
+                    .collect(),
             })
             .collect()
+    }
+
+    /// Durably accept one polled inbox item. ACK/vaccine emission happens only after the delete
+    /// commits. Returns false when the id is not currently staged.
+    pub fn accept_inbox(&self, id: Vec<u8>) -> std::result::Result<bool, FfiError> {
+        let id = to32(&id)?;
+        self.node()
+            .accept_inbox(&id)
+            .map_err(|e| FfiError::Hop(e.to_string()))
     }
 
     /// Publish this node's prekey so peers can open forward-secret sessions to it
@@ -1310,17 +1323,25 @@ impl HopNode {
         Ok(id.to_vec())
     }
 
-    /// Drain received `hps://` messages (already decrypted + sender-verified), clearing them.
+    /// Poll received `hps://` messages. Rows repeat until `accept_hps_message` succeeds.
     pub fn take_hps_messages(&self) -> Vec<HpsMessage> {
         self.node()
             .take_hps_messages()
             .into_iter()
             .map(|m| HpsMessage {
+                id: m.id.to_vec(),
                 path: m.path,
                 sender: m.sender.to_vec(),
                 body: m.body,
             })
             .collect()
+    }
+
+    pub fn accept_hps_message(&self, id: Vec<u8>) -> std::result::Result<bool, FfiError> {
+        let id = to32(&id)?;
+        self.node()
+            .accept_hps_message(&id)
+            .map_err(|e| FfiError::Hop(e.to_string()))
     }
 
     /// Seal an HTTP response back to a requester (gateway side).
@@ -1362,6 +1383,7 @@ impl HopNode {
             .take_http_responses()
             .into_iter()
             .map(|r| HttpResp {
+                id: r.id.to_vec(),
                 from: r.from.to_vec(),
                 for_request_id: r.for_id.to_vec(),
                 status: r.status,
@@ -1374,6 +1396,13 @@ impl HopNode {
                 body: r.body,
             })
             .collect()
+    }
+
+    pub fn accept_http_response(&self, id: Vec<u8>) -> std::result::Result<bool, FfiError> {
+        let id = to32(&id)?;
+        self.node()
+            .accept_http_response(&id)
+            .map_err(|e| FfiError::Hop(e.to_string()))
     }
 
     // --- service calls (DESIGN.md §29) ----------------------------------------
@@ -1450,12 +1479,20 @@ impl HopNode {
             .take_service_responses()
             .into_iter()
             .map(|r| ServiceResp {
+                id: r.id.to_vec(),
                 from: r.from.to_vec(),
                 for_request_id: r.for_id.to_vec(),
                 status: r.status,
                 body: r.body,
             })
             .collect()
+    }
+
+    pub fn accept_service_response(&self, id: Vec<u8>) -> std::result::Result<bool, FfiError> {
+        let id = to32(&id)?;
+        self.node()
+            .accept_service_response(&id)
+            .map_err(|e| FfiError::Hop(e.to_string()))
     }
 }
 
@@ -1750,6 +1787,7 @@ mod tests {
         // address for the "good key" arms so seals to it never fail on an invalid curve point.
         let node = HopNode::open(":memory:".into(), Vec::new(), vec![7u8; 32]);
         let peer = HopNode::new().address();
+        node.tick(1);
 
         // send_message_traced: wrong-length dst -> BadKey; good dst -> Ok(id) (defers, no prekey).
         assert!(matches!(

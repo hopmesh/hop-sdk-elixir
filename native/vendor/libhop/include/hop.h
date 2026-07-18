@@ -10,11 +10,18 @@
 #include <stdint.h>
 #include <stdlib.h>
 
+// Aggregate cap for variable-length byte slices crossing the C boundary. Larger application bodies
+// must be chunked by the caller; fixed-width keys use tighter per-call caps below.
+#define MAX_C_ABI_INPUT_BYTES ((16 * 1024) * 1024)
+
+// Byte length written by [`hop_validate_wire_bundle`]. The layout is documented on that function.
+#define HOP_WIRE_BUNDLE_METADATA_LEN 211
+
 // The libhop C-ABI version. Bump on any signature or semantic change to an exported `hop_*`
 // function. A wrapper should assert `hop_abi_version() == HOP_ABI_VERSION` at load so a wrapper
 // built against a newer header fails loudly instead of drifting silently (F-28). This is the
 // *ABI* version and is independent of the *wire* format version (bundle.rs `BUNDLE_VERSION`).
-#define HOP_ABI_VERSION 3
+#define HOP_ABI_VERSION 4
 
 // Which side opened a bearer link (the Noise role). Mirrors hop-core's internal `Role`.
 typedef enum HopLinkRole {
@@ -34,6 +41,20 @@ extern "C" {
 
 // Returns the ABI version this shared library implements (see [`HOP_ABI_VERSION`]).
 uint32_t hop_abi_version(void);
+
+// Decode, verify, and canonically re-encode one complete bundle without constructing protocol state.
+// On success, writes exactly [`HOP_WIRE_BUNDLE_METADATA_LEN`] bytes to `out_metadata`:
+// `[version:1, destination:1, private:1, is_ack:1, wire_len_le:4, ciphertext_len_le:4,
+// copies_le:2, hops:1, trace_len:1, created_at_le:8, lifetime_ms_le:4, hop_limit:1,
+// id:32, private_content_id:32, recognition_tag:16, recognition_ephemeral:32,
+// mailbox_present:1, mailbox:2, integrity_kind:1, signature_len_le:2, signature:64]`.
+// `integrity_kind` is 0 for an Ed25519-signed bundle, 1 for a private wire ID, and 2 for a vaccine
+// ID. Fields that do not apply are zero-filled. Returns false on invalid pointers or lengths,
+// decode/verification failure, a non-canonical encoding, or an output buffer shorter than 211 bytes.
+bool hop_validate_wire_bundle(const uint8_t *bytes,
+                              uintptr_t len,
+                              uint8_t *out_metadata,
+                              uintptr_t out_metadata_len);
 
 // Open a node with persistent storage at `db_path` (UTF-8 C string), a saved 32-byte identity
 // `secret` (pass NULL/0 for a fresh identity), and a 32-byte `app_secret` (NULL/0 = open fabric).
@@ -94,7 +115,9 @@ uintptr_t hop_node_secret(const struct HopNode *node, uint8_t *out);
 // Set the display name this node reports via presence / `hop.identify` (DESIGN.md §29).
 void hop_node_set_name(const struct HopNode *node, const char *name);
 
-// Advance time: expire adverts, retransmit unacked bundles, prune dedup. Call ~1 Hz.
+// Advance authenticated protocol time: expire adverts, retransmit unacked bundles, and prune dedup.
+// `now_ms` must be plausible, non-regressing Unix epoch milliseconds from synchronized wall time.
+// Monotonic uptime counters such as Arduino `millis()` or `esp_timer_get_time()` are not Unix time.
 void hop_node_tick(const struct HopNode *node, uint64_t now_ms);
 
 // A bearer link came up. `role` = which side dialed (the Noise initiator/responder selector),
@@ -132,16 +155,26 @@ void hop_subscribe(const struct HopNode *node, const char *topic);
 bool hop_publish_prekey(const struct HopNode *node);
 
 // Drain newly-received messages (poll model). Invokes
-// `sink(ctx, from32, content_type_cstr, body_ptr, body_len, hops, created_at_ms)` once per message
-// during this call. `from` points at 32 address bytes; `content_type` is a NUL-terminated UTF-8
-// string; `body` is `body_len` bytes — all valid only for the duration of each `sink` call.
-void hop_poll_inbox(const struct HopNode *node, void (*sink)(void *ctx,
-                                                             const uint8_t *from,
-                                                             const char *content_type,
-                                                             const uint8_t *body,
-                                                             uintptr_t body_len,
-                                                             uint8_t hops,
-                                                             uint64_t created_at), void *ctx);
+// `sink(ctx, inbox_id32, from32, content_type_cstr, body_ptr, body_len, hops, created_at_ms)` once
+// per message during this call. `inbox_id` and `from` each point at 32 bytes; `content_type` is a
+// NUL-terminated UTF-8 string; `body` is `body_len` bytes. All pointers are valid only for the
+// callback. Returning true is synchronous host acceptance: core then durably removes that item and
+// emits its ACK/vaccine. Returning false, exiting, or failing acceptance persistence leaves it queued
+// for redelivery.
+void hop_poll_inbox(const struct HopNode *node,
+                    bool (*sink)(void *ctx,
+                                 const uint8_t *inbox_id,
+                                 const uint8_t *from,
+                                 const char *content_type,
+                                 const uint8_t *body,
+                                 uintptr_t body_len,
+                                 uint8_t hops,
+                                 uint64_t created_at),
+                    void *ctx);
+
+// Durably accept one item previously returned by [`hop_poll_inbox`]. `inbox_id` points to exactly
+// 32 bytes. Returns false for NULL, an unknown/already-accepted id, or a persistence failure.
+bool hop_accept_inbox(const struct HopNode *node, const uint8_t *inbox_id);
 
 // Send to a DIRECTLY-CONNECTED peer `dst` (32 bytes), sealed with the key learned at handshake
 // (the directed §27 path; prefer `hop_send_message` unless you specifically want a directed send).
@@ -236,16 +269,23 @@ void hop_poll_service_requests(const struct HopNode *node,
                                             uintptr_t args_len),
                                void *ctx);
 
-// Drain hops:// service responses sealed back to this node (caller side). Invokes
-// `sink(ctx, from32, for_request_id32, status, body_ptr, body_len)` per response.
+// Poll hops:// service responses sealed back to this node (caller side). Invokes
+// `sink(ctx, from32, for_request_id32, status, body_ptr, body_len)` per response. Returning true is
+// synchronous acceptance. Returning false leaves the durable row queued for redelivery until
+// [`hop_accept_service_response`] succeeds.
 void hop_poll_service_responses(const struct HopNode *node,
-                                void (*sink)(void *ctx,
+                                bool (*sink)(void *ctx,
                                              const uint8_t *from,
                                              const uint8_t *for_request_id,
                                              uint16_t status,
                                              const uint8_t *body,
                                              uintptr_t body_len),
                                 void *ctx);
+
+// Durably accept one response previously returned by [`hop_poll_service_responses`].
+// `request_id` is the 32-byte `for_request_id` supplied to the callback. Returns false for NULL, an
+// unknown/already-accepted request id, or a persistence failure.
+bool hop_accept_service_response(const struct HopNode *node, const uint8_t *request_id);
 
 // Encode a 32-byte `addr` as base58 into the C buffer `out` (`out_cap` bytes incl. NUL). Returns
 // the string length (excluding NUL), or 0 on NULL / insufficient capacity.

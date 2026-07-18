@@ -50,10 +50,12 @@ Two nodes wired by a loopback bearer, then A sends B an untraceable message, all
 static void forward(void *ctx, uint64_t link, const uint8_t *bytes, size_t len) {
     hop_bytes_received((const HopNode *)ctx, 1, bytes, len);
 }
-static void on_message(void *ctx, const uint8_t *from, const char *ct,
-                       const uint8_t *body, size_t len, uint8_t hops, uint64_t created) {
+static bool on_message(void *ctx, const uint8_t *inbox_id, const uint8_t *from,
+                       const char *ct, const uint8_t *body, size_t len,
+                       uint8_t hops, uint64_t created) {
     printf("got %.*s\n", (int)len, body);
     *(int *)ctx = 1;
+    return true; // local persistence succeeded, so core may release its ACK
 }
 
 int main(void) {
@@ -89,6 +91,8 @@ service call); `./examples/smoke.sh` builds and runs it against the freshly gene
 
 - **Poll-model, never callbacks-from-nowhere.** The core never pushes asynchronously. You `hop_node_tick`
   the clock, `hop_drain_outgoing` to the bearer, and `hop_poll_inbox` / `hop_poll_service_*` to read.
+- **Inbox acceptance is explicit.** An inbox callback returns true only after it has synchronously
+  persisted the stable inbox id and message. False retains the item and withholds its ACK/vaccine.
 - **The bearer is four calls.** `hop_link_up` / `hop_bytes_received` / `hop_drain_outgoing` /
   `hop_link_down` move opaque bytes. The core owns every byte of crypto.
 - **Versioned and asserted.** `HOP_ABI_VERSION` is baked into the header; every wrapper checks

@@ -34,7 +34,8 @@ use serde::{Deserialize, Serialize};
 /// `request_id` is stable across the duplicate copies the mesh sprays.
 pub type ClaimKey = [u8; 32];
 
-/// A per-worker instance id, random per process. The replicas share the endpoint identity (same
+/// A per-worker instance id, stable in that worker's local durable store across restart. The replicas
+/// share the endpoint identity (same
 /// keypair, so they can all open the statically-sealed requests), so identity can't tell them
 /// apart; this can. A member ignores gossip stamped with its own id and counts distinct peers by it.
 pub type MemberId = [u8; 16];
@@ -80,21 +81,28 @@ pub enum ClusterMsg {
 pub const MEMBER_TTL_MS: u64 = 30_000;
 /// How often to emit a liveness beacon.
 pub const PRESENCE_INTERVAL_MS: u64 = 10_000;
+/// Hard cap on tracked peer identities. Stable local member ids avoid ordinary restart churn, while
+/// this bound contains hostile or stale gossip from accumulating identities indefinitely.
+pub const MEMBER_CAP: usize = 1_024;
 /// Cap on retained `HANDLED` keys (oldest evicted). Bounds memory and gossip size; a key older than
 /// the cap can no longer dedup, which only risks a stale-duplicate long after the fact.
-pub const HANDLED_CAP: usize = 100_000;
+pub const HANDLED_CAP: usize = 10_000;
+/// Absolute lifetime of a handled claim. Repeated traffic and gossip never extend this deadline.
+pub const HANDLED_TTL_MS: u64 = 7 * 24 * 60 * 60 * 1_000;
 
 /// The replicated coordination state for one endpoint replica.
 pub struct Cluster {
     me: MemberId,
     /// peer member id -> last-seen (our clock). Never contains `me`.
     members: HashMap<MemberId, u64>,
-    /// handled keys (any member). Value is unused today but reserved for lease/term in Phase 2.
-    handled: HashMap<ClaimKey, ()>,
+    /// handled keys (any member) to their absolute local expiry.
+    handled: HashMap<ClaimKey, u64>,
     /// insertion order, for bounded eviction.
     order: VecDeque<ClaimKey>,
     /// keys handled locally since the last gossip flush, awaiting a `Handled` broadcast.
     pending: Vec<ClaimKey>,
+    /// Rows evicted by cap or expiry that the endpoint must delete from durable KV.
+    removed: Vec<ClaimKey>,
     last_presence_ms: u64,
     started: bool,
     /// Min recently visible members (incl. self) required to act. 0 disables the threshold.
@@ -110,6 +118,7 @@ impl Cluster {
             handled: HashMap::new(),
             order: VecDeque::new(),
             pending: Vec::new(),
+            removed: Vec::new(),
             last_presence_ms: 0,
             started: false,
             quorum: 0,
@@ -143,9 +152,9 @@ impl Cluster {
     /// Seed the durable `HANDLED` set from persistence at startup. Loaded keys are NOT re-gossiped
     /// (they are already known cluster-wide from when they were first handled); they only make this
     /// replica dedup correctly across a restart.
-    pub fn load_handled(&mut self, keys: impl IntoIterator<Item = ClaimKey>) {
-        for k in keys {
-            self.insert_handled(k);
+    pub fn load_handled(&mut self, entries: impl IntoIterator<Item = (ClaimKey, u64)>) {
+        for (key, expires_at_ms) in entries {
+            self.insert_handled(key, expires_at_ms);
         }
     }
 
@@ -157,11 +166,11 @@ impl Cluster {
     /// Record that THIS replica handled `key`. Returns `true` if newly recorded (the caller should
     /// persist it; it will also be gossiped on the next [`tick`](Self::tick)). `false` means it was
     /// already handled, so the caller lost the race and must not process (or double-persist).
-    pub fn mark_handled(&mut self, key: ClaimKey) -> bool {
+    pub fn mark_handled(&mut self, key: ClaimKey, now_ms: u64) -> bool {
         if self.handled.contains_key(&key) {
             return false;
         }
-        self.insert_handled(key);
+        self.insert_handled(key, now_ms.saturating_add(HANDLED_TTL_MS));
         self.pending.push(key);
         true
     }
@@ -172,7 +181,7 @@ impl Cluster {
         match msg {
             ClusterMsg::Presence { member, .. } => {
                 if *member != self.me {
-                    self.members.insert(*member, now_ms);
+                    self.observe_member(*member, now_ms);
                 }
                 Vec::new()
             }
@@ -180,11 +189,11 @@ impl Cluster {
                 if *member == self.me {
                     return Vec::new();
                 }
-                self.members.insert(*member, now_ms); // a Handled is itself proof of life
+                self.observe_member(*member, now_ms); // a Handled is itself proof of life
                 let mut learned = Vec::new();
                 for k in keys {
                     if !self.handled.contains_key(k) {
-                        self.insert_handled(*k);
+                        self.insert_handled(*k, now_ms.saturating_add(HANDLED_TTL_MS));
                         learned.push(*k);
                     }
                 }
@@ -197,6 +206,8 @@ impl Cluster {
     /// keys handled since the last flush. The caller serializes each and `hps_publish`es it. The
     /// first tick always beacons so members appear promptly.
     pub fn tick(&mut self, now_ms: u64) -> Vec<ClusterMsg> {
+        self.prune_members(now_ms);
+        self.expire_handled(now_ms);
         let mut out = Vec::new();
         if !self.started || now_ms.saturating_sub(self.last_presence_ms) >= PRESENCE_INTERVAL_MS {
             out.push(ClusterMsg::Presence {
@@ -253,14 +264,63 @@ impl Cluster {
         self.handled.len()
     }
 
-    fn insert_handled(&mut self, key: ClaimKey) {
-        if self.handled.insert(key, ()).is_none() {
+    /// Durable rows removed by the latest load, insert, or tick.
+    pub fn take_removed(&mut self) -> Vec<ClaimKey> {
+        std::mem::take(&mut self.removed)
+    }
+
+    fn insert_handled(&mut self, key: ClaimKey, expires_at_ms: u64) {
+        if self.handled.contains_key(&key) {
+            return; // duplicate traffic never refreshes the absolute expiry
+        }
+        if self.handled.insert(key, expires_at_ms).is_none() {
             self.order.push_back(key);
             while self.order.len() > HANDLED_CAP {
                 if let Some(old) = self.order.pop_front() {
                     self.handled.remove(&old);
+                    self.pending.retain(|pending| *pending != old);
+                    self.removed.push(old);
                 }
             }
+        }
+    }
+
+    fn observe_member(&mut self, member: MemberId, now_ms: u64) {
+        self.prune_members(now_ms);
+        if !self.members.contains_key(&member) && self.members.len() >= MEMBER_CAP {
+            if let Some(oldest) = self
+                .members
+                .iter()
+                .min_by_key(|(member, seen)| (**seen, **member))
+                .map(|(member, _)| *member)
+            {
+                self.members.remove(&oldest);
+            }
+        }
+        self.members.insert(member, now_ms);
+    }
+
+    fn prune_members(&mut self, now_ms: u64) {
+        self.members
+            .retain(|_, seen| now_ms.saturating_sub(*seen) < MEMBER_TTL_MS);
+    }
+
+    fn expire_handled(&mut self, now_ms: u64) {
+        let expired: Vec<ClaimKey> = self
+            .handled
+            .iter()
+            .filter(|(_, expires_at_ms)| **expires_at_ms <= now_ms)
+            .map(|(key, _)| *key)
+            .collect();
+        if expired.is_empty() {
+            return;
+        }
+        let expired_set: std::collections::HashSet<ClaimKey> = expired.iter().copied().collect();
+        self.order.retain(|key| !expired_set.contains(key));
+        self.pending.retain(|key| !expired_set.contains(key));
+        for key in expired {
+            self.handled.remove(&key);
+            self.removed.push(key);
         }
     }
 }
@@ -297,7 +357,7 @@ mod tests {
         let k = key(7);
 
         // A finishes the request first.
-        assert!(a.mark_handled(k), "A records it fresh");
+        assert!(a.mark_handled(k, 1_000), "A records it fresh");
         assert!(!b.is_handled(&k), "B has not heard yet");
 
         // A's next tick emits the Handled gossip; B applies it.
@@ -312,13 +372,13 @@ mod tests {
         // B's later copy of the same message is now suppressed.
         assert!(b.is_handled(&k), "B dedups the later copy");
         // And B re-marking is a no-op (it lost the race).
-        assert!(!b.mark_handled(k), "B does not double-handle");
+        assert!(!b.mark_handled(k, 1_001), "B does not double-handle");
     }
 
     #[test]
     fn own_gossip_is_ignored() {
         let mut a = Cluster::new([0xAA; 16]);
-        a.mark_handled(key(1));
+        a.mark_handled(key(1), 1_000);
         let g = a.tick(1_000);
         // Feeding A its own broadcast back (floods return to sender) must learn nothing and not
         // inflate the member count with itself.
@@ -352,6 +412,30 @@ mod tests {
             1,
             "stale peers drop"
         );
+        a.tick(1_000 + MEMBER_TTL_MS + 1);
+        assert!(
+            a.members.is_empty(),
+            "stale peer rows are deleted, not ignored"
+        );
+    }
+
+    #[test]
+    fn membership_is_capped_across_many_restart_identities() {
+        let mut cluster = Cluster::new([0xAA; 16]);
+        for sequence in 0..(MEMBER_CAP + 500) {
+            let mut member = [0u8; 16];
+            member[..8].copy_from_slice(&(sequence as u64).to_be_bytes());
+            cluster.on_gossip(
+                &ClusterMsg::Presence { member, at_ms: 0 },
+                1_000 + sequence as u64,
+            );
+        }
+        assert_eq!(cluster.members.len(), MEMBER_CAP);
+        cluster.tick(1_000 + MEMBER_CAP as u64 + 500 + MEMBER_TTL_MS);
+        assert!(
+            cluster.members.is_empty(),
+            "TTL pruning removes the bounded set"
+        );
     }
 
     #[test]
@@ -375,7 +459,7 @@ mod tests {
         for i in 0..(HANDLED_CAP + 500) {
             let mut k = [0u8; 32];
             k[..8].copy_from_slice(&(i as u64).to_le_bytes());
-            a.mark_handled(k);
+            a.mark_handled(k, 1_000 + i as u64);
         }
         assert_eq!(a.handled_len(), HANDLED_CAP, "eviction caps the set");
         // The oldest key was evicted; a very recent one is retained.
@@ -389,7 +473,7 @@ mod tests {
         // A restart reloads the durable set; those keys must dedup, but must NOT be re-broadcast
         // (they were already gossiped when first handled) or a restart would gossip-storm.
         let mut a = Cluster::new([0xAA; 16]);
-        a.load_handled([key(1), key(2), key(3)]);
+        a.load_handled([(key(1), 10_000), (key(2), 10_000), (key(3), 10_000)]);
         assert!(a.is_handled(&key(2)));
         let g = a.tick(1_000);
         assert!(

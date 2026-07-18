@@ -2,7 +2,7 @@
   <img alt="Hop" src="https://hopme.sh/hop-mark.svg" width="200">
 </p>
 
-<h1 align="center">hop</h1>
+<h1 align="center">hop_endpoint</h1>
 
 <p align="center">
   <b>Receive Hop messages in your Elixir service.</b><br>
@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://hex.pm/packages/hop"><img src="https://img.shields.io/hexpm/v/hop?color=7a5299&label=hex" alt="hex"></a>
+  <a href="https://hex.pm/packages/hop_endpoint"><img src="https://img.shields.io/hexpm/v/hop_endpoint?color=7a5299&label=hex" alt="hex"></a>
   <img src="https://img.shields.io/badge/license-Apache--2.0-3ddc84" alt="license">
   <img src="https://img.shields.io/badge/elixir-%E2%89%A51.15-6ea8fe" alt="elixir >=1.15">
 </p>
@@ -31,14 +31,16 @@ Add it to `mix.exs`:
 
 ```elixir
 def deps do
-  [{:hop, "~> 0.0"}]
+  [{:hop_endpoint, "~> 0.0"}]
 end
 ```
 
 The native side is a **Rustler NIF** that compiles `hop-core`, the Rust protocol core, into your app on
-the first `mix` build, so you need a Rust toolchain present. See
-[libhop](https://github.com/hopmesh/libhop) / [hop-core](https://github.com/hopmesh/hop-core). `:ssl`,
-`:public_key`, and `:crypto` power the WSS bearer and discovery, with no third-party WebSocket deps.
+the first `mix` build, so you need a Rust toolchain present. The Hex archive includes the exact four
+Rust crates needed by the NIF under `native/vendor` plus `native/Cargo.lock`; no path escapes the Hex
+package and no monorepo checkout is required. Those protocol sources retain their FSL license while the
+Elixir wrapper is Apache-2.0. `:ssl`, `:public_key`, and `:crypto` power the WSS bearer and discovery,
+with no third-party WebSocket deps.
 
 ## Quick start
 
@@ -126,7 +128,7 @@ change).
 
 ## The Hop family
 
-`hop` is one of several SDKs over the same protocol core. Same surface, your language:
+`hop_endpoint` is one of several SDKs over the same protocol core. Same surface, your language:
 [node](https://github.com/hopmesh/hop-sdk-node) ·
 [python](https://github.com/hopmesh/hop-sdk-python) ·
 [go](https://github.com/hopmesh/hop-sdk-go) ·

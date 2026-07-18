@@ -193,6 +193,7 @@ defmodule Hop.Endpoint do
 
           {caller, _ts} ->
             GenServer.reply(caller, {:ok, status, body})
+            true = Native.accept_service_response(acc.node, for_id)
             %{acc | pending: Map.delete(acc.pending, for_id)}
         end
       end)

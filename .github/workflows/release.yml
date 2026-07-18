@@ -1,11 +1,4 @@
-# release: publish the hop package to Hex on a semver tag via `mix hex.publish`.
-#
-# Inert in the monorepo (root .github/workflows only). Copybara mirrors sdk/elixir to its
-# own repo, where mix.exs is at the repo root and this becomes the repo-root release
-# workflow.
-#
-# No native build step here: the Rustler NIF compiles on the consumer's machine at
-# install time (Hex publishes the source, not a prebuilt native library).
+# Build, inspect, and publish one source-bound Hex archive.
 name: release
 
 on:
@@ -13,38 +6,193 @@ on:
     tags:
       - 'v[0-9]+.[0-9]+.[0-9]+'
 
-# Least privilege: we only read the checkout. Hex auth rides HEX_API_KEY.
 permissions:
   contents: read
 
 jobs:
-  publish:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Set up Elixir and OTP
-        uses: erlef/setup-beam@v1
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
-          elixir-version: '1.18'
-          otp-version: '27'
-
-      # Guard: the tag (minus its leading v) must equal mix.exs's project version, so a
-      # mistyped tag can never publish the wrong version. Read it without compiling.
-      - name: Verify tag matches mix version
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: '1.18.4'
+          otp-version: '27.3.4.3'
+          rebar3-version: '3.27.0'
+      - name: Install exact Rust and Hex tools
         run: |
-          tag="${GITHUB_REF_NAME#v}"
-          ver="$(sed -n 's/.*version: *"\([^"]*\)".*/\1/p' mix.exs | head -1)"
-          if [ "$tag" != "$ver" ]; then
-            echo "tag $tag does not match mix.exs version $ver" >&2
-            exit 1
-          fi
+          rustup toolchain install 1.97.0 --profile minimal
+          mix local.hex 2.2.1 --force
+      - name: Verify, test, and build Hex archive
+        env:
+          RUSTUP_TOOLCHAIN: '1.97.0'
+        run: |
+          set -euo pipefail
+          declared="$(sed -n 's/.*version: *"\([^"]*\)".*/\1/p' mix.exs | head -1)"
+          test "v$declared" = "$GITHUB_REF_NAME"
+          test -f native/Cargo.lock
+          python3 .github/package-export-smoke.py validate-elixir-export --export .
+          mix deps.get
+          mix format --check-formatted
+          mix compile --warnings-as-errors
+          mix test
+          mkdir "$RUNNER_TEMP/release"
+          mix hex.build --output "$RUNNER_TEMP/release/hop_endpoint-$declared.tar"
+      - name: Inspect the Hex payload and compile a clean consumer
+        env:
+          RUSTUP_TOOLCHAIN: '1.97.0'
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/release/hop_endpoint-${GITHUB_REF_NAME#v}.tar"
+          python3 - "$archive" "$RUNNER_TEMP/hex-contents" <<'PY'
+          import io
+          import pathlib
+          import sys
+          import tarfile
 
-      - name: Fetch dependencies
-        run: mix deps.get
+          package, destination = map(pathlib.Path, sys.argv[1:])
+          destination.mkdir()
+          with tarfile.open(package) as outer:
+              payload = outer.extractfile(outer.getmember("contents.tar.gz"))
+              if payload is None:
+                  raise SystemExit("Hex package contents cannot be read")
+              contents = payload.read()
+          with tarfile.open(fileobj=io.BytesIO(contents), mode="r:gz") as inner:
+              names = set()
+              for member in inner.getmembers():
+                  path = pathlib.PurePosixPath(member.name)
+                  if member.isdir():
+                      continue
+                  if not member.isfile() or path.is_absolute() or ".." in path.parts or member.name in names:
+                      raise SystemExit(f"unsafe Hex member: {member.name}")
+                  names.add(member.name)
+                  source = inner.extractfile(member)
+                  if source is None:
+                      raise SystemExit(f"Hex member cannot be read: {member.name}")
+                  target = destination.joinpath(*path.parts)
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(source.read())
+          required = {
+              "mix.exs", "native/Cargo.toml", "native/Cargo.lock",
+              "native/hop_endpoint/Cargo.toml", "native/hop_endpoint/src/lib.rs",
+              "native/vendor/libhop/src/lib.rs", "native/vendor/hop-core/src/lib.rs",
+              "native/vendor/hop-endpoint-core/src/lib.rs",
+              "native/vendor/hop-store-sqlite/src/lib.rs",
+          }
+          missing = required - names
+          if missing:
+              raise SystemExit(f"Hex package missing files: {sorted(missing)}")
+          if any(name.startswith("priv/native/") for name in names):
+              raise SystemExit("Hex package contains a host-specific NIF binary")
+          print(f"Hex package files: {len(names)}")
+          PY
+          consumer="$RUNNER_TEMP/hex-consumer"
+          mkdir "$consumer"
+          cd "$consumer"
+          cat > mix.exs <<EOF
+          defmodule CleanConsumer.MixProject do
+            use Mix.Project
+            def project, do: [app: :clean_consumer, version: "0.0.0", elixir: "~> 1.15", deps: deps()]
+            defp deps, do: [{:hop_endpoint, path: "$RUNNER_TEMP/hex-contents"}]
+          end
+          EOF
+          mkdir test
+          printf 'ExUnit.start()\n' > test/test_helper.exs
+          cat > test/import_test.exs <<'EOF'
+          defmodule CleanConsumer.ImportTest do
+            use ExUnit.Case
+            test "loads Hop.Endpoint", do: assert(Code.ensure_loaded?(Hop.Endpoint))
+          end
+          EOF
+          mix deps.get
+          mix test
+      - name: Bind the inspected Hex archive to this workflow run
+        run: |
+          python3 .github/release-artifact.py create --directory "$RUNNER_TEMP/release"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release/*
+          if-no-files-found: error
 
-      - name: Publish to Hex
-        run: mix hex.publish --yes
+  publish:
+    needs: build
+    environment: release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Mint canonical-source read token
+        id: source-token
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        with:
+          app-id: ${{ secrets.HOP_SOURCE_APP_ID }}
+          private-key: ${{ secrets.HOP_SOURCE_APP_PRIVATE_KEY }}
+          owner: hopmesh
+          repositories: hop
+          permission-actions: read
+          permission-checks: read
+          permission-contents: read
+      - name: Verify canonical source provenance
+        id: provenance
+        env:
+          SOURCE_TOKEN: ${{ steps.source-token.outputs.token }}
+        run: python3 .github/release-provenance.py --component hop-sdk-elixir --github-output "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/release
+      - name: Verify immutable Hex artifact
+        run: >-
+          python3 .github/release-artifact.py verify --directory "$RUNNER_TEMP/release"
+          --canonical-source-sha '${{ steps.provenance.outputs.source_sha }}'
+      - name: Attest verified Hex archive
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4.1.1
+        with:
+          subject-path: ${{ runner.temp }}/release/*.tar
+      - name: Publish verified Hex archive
         env:
           HEX_API_KEY: ${{ secrets.HEX_API_KEY }}
+          HEX_DIRECTORY: ${{ runner.temp }}/release
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import urllib.error
+          import urllib.request
+
+          version = os.environ["GITHUB_REF_NAME"].removeprefix("v")
+          archive = Path(os.environ["HEX_DIRECTORY"]) / f"hop_endpoint-{version}.tar"
+          if not archive.is_file() or archive.stat().st_size == 0:
+              raise SystemExit("verified Hex archive is absent")
+          request = urllib.request.Request(
+              "https://hex.pm/api/packages/hop_endpoint/releases?replace=false",
+              data=archive.read_bytes(),
+              method="POST",
+              headers={
+                  "Authorization": os.environ["HEX_API_KEY"],
+                  "Content-Type": "application/octet-stream",
+                  "User-Agent": "hop-release/1",
+              },
+          )
+          try:
+              with urllib.request.urlopen(request, timeout=120) as response:
+                  if response.status not in range(200, 300):
+                      raise SystemExit(f"Hex publish failed: HTTP {response.status}")
+                  print(f"published verified Hex archive: HTTP {response.status}")
+          except urllib.error.HTTPError as error:
+              detail = error.read().decode("utf-8", "replace")
+              raise SystemExit(f"Hex publish failed: HTTP {error.code}: {detail}") from error
+          PY

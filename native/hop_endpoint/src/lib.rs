@@ -166,6 +166,20 @@ fn take_service_responses<'a>(
 }
 
 #[rustler::nif]
+fn accept_service_response(node: ResourceArc<NodeRes>, for_request_id: Binary) -> bool {
+    let Some(response_id) = node
+        .0
+        .take_service_responses()
+        .into_iter()
+        .find(|response| response.for_request_id == for_request_id.as_slice())
+        .map(|response| response.id)
+    else {
+        return false;
+    };
+    node.0.accept_service_response(response_id).unwrap_or(false)
+}
+
+#[rustler::nif]
 fn to_b58(addr: Binary) -> String {
     hop::address_base58(addr.as_slice().to_vec())
 }

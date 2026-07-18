@@ -24,15 +24,17 @@ static void forward(void *ctx, uint64_t link, const uint8_t *bytes, size_t len) 
 // Inbox capture.
 typedef struct { int got; char text[256]; uint8_t hops; } Inbox;
 
-static void on_message(void *ctx, const uint8_t *from, const char *content_type,
-                       const uint8_t *body, size_t body_len, uint8_t hops, uint64_t created_at) {
-    (void)from; (void)content_type; (void)created_at;
+static bool on_message(void *ctx, const uint8_t *inbox_id, const uint8_t *from,
+                       const char *content_type, const uint8_t *body, size_t body_len,
+                       uint8_t hops, uint64_t created_at) {
+    (void)inbox_id; (void)from; (void)content_type; (void)created_at;
     Inbox *in = (Inbox *)ctx;
     size_t n = body_len < sizeof(in->text) - 1 ? body_len : sizeof(in->text) - 1;
     memcpy(in->text, body, n);
     in->text[n] = '\0';
     in->hops = hops;
     in->got = 1;
+    return true;
 }
 
 // hops:// host-side: capture one inbound service request (so we can seal a reply to its caller).
@@ -52,13 +54,14 @@ static void on_request(void *ctx, const uint8_t *from, const uint8_t *request_id
 // hops:// caller-side: capture the response sealed back to us.
 typedef struct { int got; uint16_t status; char body[256]; } RespCap;
 
-static void on_response(void *ctx, const uint8_t *from, const uint8_t *for_request_id,
+static bool on_response(void *ctx, const uint8_t *from, const uint8_t *for_request_id,
                         uint16_t status, const uint8_t *body, size_t body_len) {
     (void)from; (void)for_request_id;
     RespCap *r = (RespCap *)ctx;
     size_t n = body_len < sizeof(r->body) - 1 ? body_len : sizeof(r->body) - 1;
     memcpy(r->body, body, n); r->body[n] = '\0';
     r->status = status; r->got = 1;
+    return true;
 }
 
 int main(void) {

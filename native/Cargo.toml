@@ -1,0 +1,31 @@
+[workspace]
+resolver = "2"
+members = [
+    "hop_endpoint",
+    "vendor/hop-core",
+    "vendor/hop-endpoint-core",
+    "vendor/hop-store-sqlite",
+    "vendor/libhop",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+repository = "https://github.com/hopmesh/hop"
+
+[workspace.dependencies]
+hop = { path = "vendor/libhop" }
+hop-core = { path = "vendor/hop-core" }
+hop-endpoint-core = { path = "vendor/hop-endpoint-core" }
+hop-store-sqlite = { path = "vendor/hop-store-sqlite", default-features = false }
+serde = { version = "1", features = ["derive"] }
+postcard = { version = "1", features = ["use-std"] }
+blake3 = "1"
+sha2 = "0.11"
+ed25519-dalek = { version = "3", features = ["rand_core"] }
+x25519-dalek = { version = "3", features = ["static_secrets"] }
+chacha20poly1305 = "0.11"
+rand_core = { version = "0.6", features = ["getrandom"] }
+thiserror = "2"
+miniz_oxide = "0.9"
+snow = "0.10"

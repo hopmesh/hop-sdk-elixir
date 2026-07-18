@@ -4,7 +4,7 @@ defmodule Hop.Native do
   the ergonomics live in `Hop.Endpoint`. All addresses/bytes cross as binaries. Not called directly
   by app code.
   """
-  use Rustler, otp_app: :hop, crate: "hop_endpoint", mode: :debug
+  use Rustler, otp_app: :hop_endpoint, crate: "hop_endpoint", mode: :debug
 
   # Stubs replaced by the NIF at load; each raises if the shared library failed to load.
   def open_ephemeral, do: err()
@@ -24,6 +24,7 @@ defmodule Hop.Native do
   def send_service_response(_node, _to, _for_id, _status, _body), do: err()
   def take_service_requests(_node), do: err()
   def take_service_responses(_node), do: err()
+  def accept_service_response(_node, _for_request_id), do: err()
   def to_b58(_addr), do: err()
   def from_b58(_text), do: err()
   def sign_reach_record(_node, _endpoint, _ttl_secs), do: err()

@@ -19,6 +19,23 @@ use std::sync::Arc;
 
 use crate::HopNode;
 
+/// Aggregate cap for variable-length byte slices crossing the C boundary. Larger application bodies
+/// must be chunked by the caller; fixed-width keys use tighter per-call caps below.
+pub const MAX_C_ABI_INPUT_BYTES: usize = 16 * 1024 * 1024;
+/// Byte length written by [`hop_validate_wire_bundle`]. The layout is documented on that function.
+pub const HOP_WIRE_BUNDLE_METADATA_LEN: usize = 211;
+const MAX_C_ABI_PASSPHRASE_BYTES: usize = 4096;
+const MAX_C_ABI_REACH_RECORD_BYTES: usize = 64 * 1024;
+
+const WIRE_META_CONTENT_ID: usize = 61;
+const WIRE_META_RECOGNITION_TAG: usize = 93;
+const WIRE_META_RECOGNITION_EPHEMERAL: usize = 109;
+const WIRE_META_MAILBOX_PRESENT: usize = 141;
+const WIRE_META_MAILBOX: usize = 142;
+const WIRE_META_INTEGRITY_KIND: usize = 144;
+const WIRE_META_SIGNATURE_LEN: usize = 145;
+const WIRE_META_SIGNATURE: usize = 147;
+
 /// Which side opened a bearer link (the Noise role). Mirrors hop-core's internal `Role`.
 #[repr(C)]
 pub enum HopLinkRole {
@@ -59,10 +76,18 @@ fn c_string_lossy(s: String) -> std::ffi::CString {
     }
 }
 unsafe fn slice<'a>(p: *const u8, len: usize) -> &'a [u8] {
-    if p.is_null() || len == 0 {
-        &[]
+    bounded_slice(p, len, MAX_C_ABI_INPUT_BYTES).unwrap_or(&[])
+}
+
+/// Validate lengths before constructing a Rust slice. A NULL pointer is valid only for an empty
+/// slice, and an over-limit length is rejected before the pointer is dereferenced.
+unsafe fn bounded_slice<'a>(p: *const u8, len: usize, max: usize) -> Option<&'a [u8]> {
+    if len > max || (p.is_null() && len != 0) {
+        None
+    } else if len == 0 {
+        Some(&[])
     } else {
-        std::slice::from_raw_parts(p, len)
+        Some(std::slice::from_raw_parts(p, len))
     }
 }
 
@@ -72,12 +97,107 @@ unsafe fn slice<'a>(p: *const u8, len: usize) -> &'a [u8] {
 /// function. A wrapper should assert `hop_abi_version() == HOP_ABI_VERSION` at load so a wrapper
 /// built against a newer header fails loudly instead of drifting silently (F-28). This is the
 /// *ABI* version and is independent of the *wire* format version (bundle.rs `BUNDLE_VERSION`).
-pub const HOP_ABI_VERSION: u32 = 3;
+pub const HOP_ABI_VERSION: u32 = 4;
 
 /// Returns the ABI version this shared library implements (see [`HOP_ABI_VERSION`]).
 #[no_mangle]
 pub extern "C" fn hop_abi_version() -> u32 {
     HOP_ABI_VERSION
+}
+
+/// Decode, verify, and canonically re-encode one complete bundle without constructing protocol state.
+/// On success, writes exactly [`HOP_WIRE_BUNDLE_METADATA_LEN`] bytes to `out_metadata`:
+/// `[version:1, destination:1, private:1, is_ack:1, wire_len_le:4, ciphertext_len_le:4,
+/// copies_le:2, hops:1, trace_len:1, created_at_le:8, lifetime_ms_le:4, hop_limit:1,
+/// id:32, private_content_id:32, recognition_tag:16, recognition_ephemeral:32,
+/// mailbox_present:1, mailbox:2, integrity_kind:1, signature_len_le:2, signature:64]`.
+/// `integrity_kind` is 0 for an Ed25519-signed bundle, 1 for a private wire ID, and 2 for a vaccine
+/// ID. Fields that do not apply are zero-filled. Returns false on invalid pointers or lengths,
+/// decode/verification failure, a non-canonical encoding, or an output buffer shorter than 211 bytes.
+#[no_mangle]
+pub unsafe extern "C" fn hop_validate_wire_bundle(
+    bytes: *const u8,
+    len: usize,
+    out_metadata: *mut u8,
+    out_metadata_len: usize,
+) -> bool {
+    catch(false, || {
+        let Some(bytes) = bounded_slice(bytes, len, hop_core::bundle::MAX_BUNDLE_WIRE_BYTES) else {
+            return false;
+        };
+        if out_metadata.is_null() || out_metadata_len < HOP_WIRE_BUNDLE_METADATA_LEN {
+            return false;
+        }
+        let Some(metadata) = validated_wire_metadata(bytes) else {
+            return false;
+        };
+        std::ptr::copy(
+            metadata.as_ptr(),
+            out_metadata,
+            HOP_WIRE_BUNDLE_METADATA_LEN,
+        );
+        true
+    })
+}
+
+fn validated_wire_metadata(bytes: &[u8]) -> Option<[u8; HOP_WIRE_BUNDLE_METADATA_LEN]> {
+    use hop_core::bundle::{Bundle, Destination};
+
+    let bundle = Bundle::from_bytes(bytes).ok()?;
+    bundle.verify().ok()?;
+    if bundle.to_bytes().ok()?.as_slice() != bytes {
+        return None;
+    }
+
+    let destination = match &bundle.inner.dst {
+        Destination::Device(_) => 0,
+        Destination::AckTo(_, _) => 1,
+        Destination::Broadcast => 2,
+        Destination::Vaccine(_) => 3,
+    };
+    let wire_len = u32::try_from(bytes.len()).ok()?;
+    let ciphertext_len = u32::try_from(bundle.inner.payload.ciphertext.len()).ok()?;
+    let trace_len = u8::try_from(bundle.env.trace.len()).ok()?;
+    let signature_len = u16::try_from(bundle.sig.len()).ok()?;
+    if bundle.sig.len() > 64 {
+        return None;
+    }
+
+    let mut metadata = [0u8; HOP_WIRE_BUNDLE_METADATA_LEN];
+    metadata[0] = bundle.inner.version;
+    metadata[1] = destination;
+    metadata[2] = u8::from(bundle.is_private());
+    metadata[3] = u8::from(bundle.inner.flags.is_ack);
+    metadata[4..8].copy_from_slice(&wire_len.to_le_bytes());
+    metadata[8..12].copy_from_slice(&ciphertext_len.to_le_bytes());
+    metadata[12..14].copy_from_slice(&bundle.env.copies.to_le_bytes());
+    metadata[14] = bundle.env.hops;
+    metadata[15] = trace_len;
+    metadata[16..24].copy_from_slice(&bundle.inner.created_at.to_le_bytes());
+    metadata[24..28].copy_from_slice(&bundle.inner.lifetime_ms.to_le_bytes());
+    metadata[28] = bundle.env.hop_limit;
+    metadata[29..61].copy_from_slice(&bundle.id());
+    if let Some(content_id) = bundle.private_content_id() {
+        metadata[WIRE_META_CONTENT_ID..WIRE_META_RECOGNITION_TAG].copy_from_slice(&content_id);
+    }
+    if let Some(header) = &bundle.inner.private {
+        metadata[WIRE_META_RECOGNITION_TAG..WIRE_META_RECOGNITION_EPHEMERAL]
+            .copy_from_slice(&header.tag);
+        metadata[WIRE_META_RECOGNITION_EPHEMERAL..WIRE_META_MAILBOX_PRESENT]
+            .copy_from_slice(&header.ephemeral);
+        if let Some(mailbox) = header.mailbox {
+            metadata[WIRE_META_MAILBOX_PRESENT] = 1;
+            metadata[WIRE_META_MAILBOX..WIRE_META_INTEGRITY_KIND].copy_from_slice(&mailbox);
+        }
+        metadata[WIRE_META_INTEGRITY_KIND] = 1;
+    } else if matches!(&bundle.inner.dst, Destination::Vaccine(_)) {
+        metadata[WIRE_META_INTEGRITY_KIND] = 2;
+    }
+    metadata[WIRE_META_SIGNATURE_LEN..WIRE_META_SIGNATURE]
+        .copy_from_slice(&signature_len.to_le_bytes());
+    metadata[WIRE_META_SIGNATURE..WIRE_META_SIGNATURE + bundle.sig.len()]
+        .copy_from_slice(&bundle.sig);
+    Some(metadata)
 }
 
 /// Run a constructor closure, converting a panic into a NULL return so it never unwinds across
@@ -114,8 +234,14 @@ pub unsafe extern "C" fn hop_node_open(
         return std::ptr::null();
     };
     let path = path.to_string();
-    let secret = slice(secret, secret_len).to_vec();
-    let app = slice(app_secret, app_secret_len).to_vec();
+    let (Some(secret), Some(app)) = (
+        bounded_slice(secret, secret_len, 32),
+        bounded_slice(app_secret, app_secret_len, 32),
+    ) else {
+        return std::ptr::null();
+    };
+    let secret = secret.to_vec();
+    let app = app.to_vec();
     catch_ctor(|| Arc::into_raw(HopNode::open(path, secret, app)))
 }
 
@@ -137,9 +263,16 @@ pub unsafe extern "C" fn hop_node_open_keyed(
         return std::ptr::null();
     };
     let path = path.to_string();
-    let secret = slice(secret, secret_len).to_vec();
-    let app = slice(app_secret, app_secret_len).to_vec();
-    let key = slice(key, key_len).to_vec();
+    let (Some(secret), Some(app), Some(key)) = (
+        bounded_slice(secret, secret_len, 32),
+        bounded_slice(app_secret, app_secret_len, 32),
+        bounded_slice(key, key_len, 64),
+    ) else {
+        return std::ptr::null();
+    };
+    let secret = secret.to_vec();
+    let app = app.to_vec();
+    let key = key.to_vec();
     catch_ctor(|| Arc::into_raw(HopNode::open_keyed(path, secret, app, key)))
 }
 
@@ -156,7 +289,10 @@ pub unsafe extern "C" fn hop_node_with_secret(
     secret: *const u8,
     secret_len: usize,
 ) -> *const HopNode {
-    let secret = slice(secret, secret_len).to_vec();
+    let Some(secret) = bounded_slice(secret, secret_len, 32) else {
+        return std::ptr::null();
+    };
+    let secret = secret.to_vec();
     catch_ctor(|| Arc::into_raw(HopNode::with_secret(secret)))
 }
 
@@ -230,7 +366,9 @@ pub unsafe extern "C" fn hop_node_set_name(node: *const HopNode, name: *const c_
 
 // ---- clock ------------------------------------------------------------------------------------
 
-/// Advance time: expire adverts, retransmit unacked bundles, prune dedup. Call ~1 Hz.
+/// Advance authenticated protocol time: expire adverts, retransmit unacked bundles, and prune dedup.
+/// `now_ms` must be plausible, non-regressing Unix epoch milliseconds from synchronized wall time.
+/// Monotonic uptime counters such as Arduino `millis()` or `esp_timer_get_time()` are not Unix time.
 #[no_mangle]
 pub unsafe extern "C" fn hop_node_tick(node: *const HopNode, now_ms: u64) {
     catch((), || {
@@ -269,7 +407,9 @@ pub unsafe extern "C" fn hop_bytes_received(
 ) {
     catch((), || {
         if let Some(node) = node_ref(node) {
-            node.received(link, slice(data, len).to_vec());
+            if let Some(data) = bounded_slice(data, len, hop_core::node::MAX_LINK_PACKET_BYTES) {
+                node.received(link, data.to_vec());
+            }
         }
     })
 }
@@ -330,22 +470,26 @@ pub unsafe extern "C" fn hop_publish_prekey(node: *const HopNode) -> bool {
 }
 
 /// Drain newly-received messages (poll model). Invokes
-/// `sink(ctx, from32, content_type_cstr, body_ptr, body_len, hops, created_at_ms)` once per message
-/// during this call. `from` points at 32 address bytes; `content_type` is a NUL-terminated UTF-8
-/// string; `body` is `body_len` bytes — all valid only for the duration of each `sink` call.
+/// `sink(ctx, inbox_id32, from32, content_type_cstr, body_ptr, body_len, hops, created_at_ms)` once
+/// per message during this call. `inbox_id` and `from` each point at 32 bytes; `content_type` is a
+/// NUL-terminated UTF-8 string; `body` is `body_len` bytes. All pointers are valid only for the
+/// callback. Returning true is synchronous host acceptance: core then durably removes that item and
+/// emits its ACK/vaccine. Returning false, exiting, or failing acceptance persistence leaves it queued
+/// for redelivery.
 #[no_mangle]
 pub unsafe extern "C" fn hop_poll_inbox(
     node: *const HopNode,
     sink: Option<
         extern "C" fn(
             ctx: *mut c_void,
+            inbox_id: *const u8,
             from: *const u8,
             content_type: *const c_char,
             body: *const u8,
             body_len: usize,
             hops: u8,
             created_at: u64,
-        ),
+        ) -> bool,
     >,
     ctx: *mut c_void,
 ) {
@@ -355,8 +499,10 @@ pub unsafe extern "C" fn hop_poll_inbox(
     let inbox = catch(Vec::new(), || node.take_inbox());
     for m in inbox {
         let ct = c_string_lossy(m.content_type);
-        sink(
+        let id = m.id.clone();
+        let accepted = sink(
             ctx,
+            m.id.as_ptr(),
             m.from.as_ptr(),
             ct.as_ptr(),
             m.body.as_ptr(),
@@ -364,7 +510,26 @@ pub unsafe extern "C" fn hop_poll_inbox(
             m.hops,
             m.created_at,
         );
+        if accepted {
+            let _ = node.accept_inbox(id);
+        }
     }
+}
+
+/// Durably accept one item previously returned by [`hop_poll_inbox`]. `inbox_id` points to exactly
+/// 32 bytes. Returns false for NULL, an unknown/already-accepted id, or a persistence failure.
+#[no_mangle]
+pub unsafe extern "C" fn hop_accept_inbox(node: *const HopNode, inbox_id: *const u8) -> bool {
+    catch(false, || {
+        let Some(node) = node_ref(node) else {
+            return false;
+        };
+        if inbox_id.is_null() {
+            return false;
+        }
+        node.accept_inbox(slice(inbox_id, 32).to_vec())
+            .unwrap_or(false)
+    })
 }
 
 /// Send to a DIRECTLY-CONNECTED peer `dst` (32 bytes), sealed with the key learned at handshake
@@ -391,10 +556,13 @@ pub unsafe extern "C" fn hop_send_to(
         if dst.is_null() {
             return false;
         }
+        let Some(body) = bounded_slice(body, body_len, MAX_C_ABI_INPUT_BYTES) else {
+            return false;
+        };
         match node.send_to(
             slice(dst, 32).to_vec(),
             ct.to_string(),
-            slice(body, body_len).to_vec(),
+            body.to_vec(),
             request_ack,
         ) {
             Ok(id) => {
@@ -485,11 +653,14 @@ pub unsafe extern "C" fn hop_send_service_request(
         if dst.is_null() {
             return false;
         }
+        let Some(args) = bounded_slice(args, args_len, MAX_C_ABI_INPUT_BYTES) else {
+            return false;
+        };
         match node.send_service_request(
             slice(dst, 32).to_vec(),
             service.to_string(),
             method.to_string(),
-            slice(args, args_len).to_vec(),
+            args.to_vec(),
         ) {
             Ok(id) => {
                 if !out_id.is_null() {
@@ -520,11 +691,14 @@ pub unsafe extern "C" fn hop_send_service_response(
         if to.is_null() || for_request_id.is_null() {
             return false;
         }
+        let Some(body) = bounded_slice(body, body_len, MAX_C_ABI_INPUT_BYTES) else {
+            return false;
+        };
         node.send_service_response(
             slice(to, 32).to_vec(),
             slice(for_request_id, 32).to_vec(),
             status,
-            slice(body, body_len).to_vec(),
+            body.to_vec(),
         )
         .is_ok()
     })
@@ -563,7 +737,9 @@ pub unsafe extern "C" fn hop_cluster_join_passphrase(
 ) {
     catch((), || {
         if let Some(node) = node_ref(node) {
-            node.cluster_join_passphrase(slice(pass, pass_len));
+            if let Some(pass) = bounded_slice(pass, pass_len, MAX_C_ABI_PASSPHRASE_BYTES) {
+                node.cluster_join_passphrase(pass);
+            }
         }
     })
 }
@@ -666,8 +842,10 @@ pub unsafe extern "C" fn hop_poll_service_requests(
     }
 }
 
-/// Drain hops:// service responses sealed back to this node (caller side). Invokes
-/// `sink(ctx, from32, for_request_id32, status, body_ptr, body_len)` per response.
+/// Poll hops:// service responses sealed back to this node (caller side). Invokes
+/// `sink(ctx, from32, for_request_id32, status, body_ptr, body_len)` per response. Returning true is
+/// synchronous acceptance. Returning false leaves the durable row queued for redelivery until
+/// [`hop_accept_service_response`] succeeds.
 #[no_mangle]
 pub unsafe extern "C" fn hop_poll_service_responses(
     node: *const HopNode,
@@ -679,7 +857,7 @@ pub unsafe extern "C" fn hop_poll_service_responses(
             status: u16,
             body: *const u8,
             body_len: usize,
-        ),
+        ) -> bool,
     >,
     ctx: *mut c_void,
 ) {
@@ -689,7 +867,7 @@ pub unsafe extern "C" fn hop_poll_service_responses(
     // core-ffi-01: contain a panic in the node-side drain (see hop_poll_service_requests).
     let responses = catch(Vec::new(), || node.take_service_responses());
     for r in responses {
-        sink(
+        let accepted = sink(
             ctx,
             r.from.as_ptr(),
             r.for_request_id.as_ptr(),
@@ -697,7 +875,38 @@ pub unsafe extern "C" fn hop_poll_service_responses(
             r.body.as_ptr(),
             r.body.len(),
         );
+        if accepted {
+            let _ = node.accept_service_response(r.id);
+        }
     }
+}
+
+/// Durably accept one response previously returned by [`hop_poll_service_responses`].
+/// `request_id` is the 32-byte `for_request_id` supplied to the callback. Returns false for NULL, an
+/// unknown/already-accepted request id, or a persistence failure.
+#[no_mangle]
+pub unsafe extern "C" fn hop_accept_service_response(
+    node: *const HopNode,
+    request_id: *const u8,
+) -> bool {
+    catch(false, || {
+        let Some(node) = node_ref(node) else {
+            return false;
+        };
+        if request_id.is_null() {
+            return false;
+        }
+        let request_id = slice(request_id, 32);
+        let Some(response_id) = node
+            .take_service_responses()
+            .into_iter()
+            .find(|response| response.for_request_id.as_slice() == request_id)
+            .map(|response| response.id)
+        else {
+            return false;
+        };
+        node.accept_service_response(response_id).unwrap_or(false)
+    })
 }
 
 // ---- address encoding helpers (base58) --------------------------------------------------------
@@ -766,10 +975,13 @@ pub unsafe extern "C" fn hop_send_message(
         if dst.is_null() {
             return false;
         }
+        let Some(body) = bounded_slice(body, body_len, MAX_C_ABI_INPUT_BYTES) else {
+            return false;
+        };
         match node.send_message(
             slice(dst, 32).to_vec(),
             ct.to_string(),
-            slice(body, body_len).to_vec(),
+            body.to_vec(),
             request_ack,
         ) {
             Ok(id) => {
@@ -826,9 +1038,10 @@ pub unsafe extern "C" fn hop_verify_reach_record(
     ctx: *mut c_void,
 ) -> bool {
     let now = if now_secs == 0 { None } else { Some(now_secs) };
-    let rec = catch(None, || {
-        hop_core::reach::ReachRecord::verify(slice(bytes, len), now)
-    });
+    let Some(bytes) = bounded_slice(bytes, len, MAX_C_ABI_REACH_RECORD_BYTES) else {
+        return false;
+    };
+    let rec = catch(None, || hop_core::reach::ReachRecord::verify(bytes, now));
     match rec {
         Some(r) => {
             if let Some(sink) = sink {
@@ -854,6 +1067,7 @@ mod tests {
     //! way a C/Swift/Kotlin host does - through raw pointers - so a regression in the ABI seam itself
     //! (not just the Rust core) is caught here rather than only on-device.
     use super::*;
+    use proptest::prelude::*;
 
     #[test]
     fn c_string_lossy_strips_interior_nuls_instead_of_emptying() {
@@ -886,6 +1100,46 @@ mod tests {
             assert!(!hop_node_is_persistent(std::ptr::null()));
             assert_eq!(hop_node_rehydrate_dropped(std::ptr::null()), 0);
             hop_node_free(std::ptr::null()); // documented no-op on NULL
+        }
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(256))]
+
+        #[test]
+        fn null_and_over_limit_input_lengths_are_rejected_before_dereference(
+            len in prop_oneof![
+                Just(0usize),
+                Just(1usize),
+                Just(31usize),
+                Just(32usize),
+                Just(33usize),
+                Just(MAX_C_ABI_INPUT_BYTES + 1),
+                Just(usize::MAX),
+            ]
+        ) {
+            unsafe {
+                let null_result = bounded_slice(std::ptr::null(), len, MAX_C_ABI_INPUT_BYTES);
+                prop_assert_eq!(null_result.is_some(), len == 0);
+
+                let byte = [0x5au8];
+                if len == 0 || len == 1 || len > MAX_C_ABI_INPUT_BYTES {
+                    let valid_result = bounded_slice(byte.as_ptr(), len, MAX_C_ABI_INPUT_BYTES);
+                    prop_assert_eq!(valid_result.is_some(), len <= 1);
+                }
+
+                let node = hop_node_new();
+                prop_assert!(!node.is_null());
+                hop_bytes_received(node, 1, std::ptr::null(), len);
+                let restored = hop_node_with_secret(std::ptr::null(), len);
+                if len == 0 {
+                    prop_assert!(!restored.is_null());
+                    hop_node_free(restored);
+                } else {
+                    prop_assert!(restored.is_null());
+                }
+                hop_node_free(node);
+            }
         }
     }
 
@@ -1060,18 +1314,22 @@ mod tests {
     }
 
     /// Inbox collector for `hop_poll_inbox`.
+    type PolledInboxItem = (Vec<u8>, String, Vec<u8>, u8, Vec<u8>);
+
     struct InboxCollector {
-        msgs: Vec<(Vec<u8>, String, Vec<u8>, u8)>,
+        msgs: Vec<PolledInboxItem>,
+        accept: bool,
     }
     extern "C" fn inbox_sink(
         ctx: *mut c_void,
+        inbox_id: *const u8,
         from: *const u8,
         content_type: *const c_char,
         body: *const u8,
         body_len: usize,
         hops: u8,
         _created_at: u64,
-    ) {
+    ) -> bool {
         unsafe {
             let c = &mut *(ctx as *mut InboxCollector);
             let ct = CStr::from_ptr(content_type).to_string_lossy().into_owned();
@@ -1080,13 +1338,24 @@ mod tests {
                 ct,
                 slice(body, body_len).to_vec(),
                 hops,
+                slice(inbox_id, 32).to_vec(),
             ));
         }
+        unsafe { (*(ctx as *mut InboxCollector)).accept }
     }
-    unsafe fn poll_inbox(node: *const HopNode) -> Vec<(Vec<u8>, String, Vec<u8>, u8)> {
-        let mut c = InboxCollector { msgs: Vec::new() };
+    unsafe fn poll_inbox_with_acceptance(
+        node: *const HopNode,
+        accept: bool,
+    ) -> Vec<PolledInboxItem> {
+        let mut c = InboxCollector {
+            msgs: Vec::new(),
+            accept,
+        };
         hop_poll_inbox(node, Some(inbox_sink), &mut c as *mut _ as *mut c_void);
         c.msgs
+    }
+    unsafe fn poll_inbox(node: *const HopNode) -> Vec<PolledInboxItem> {
+        poll_inbox_with_acceptance(node, true)
     }
 
     #[test]
@@ -1231,8 +1500,15 @@ mod tests {
             // handshake side effect. (Without this the test could pass on any session-establishing
             // artifact and the "forward-secret message" claim would outrun what it verified.)
             pump(a, 11, b, 22);
+            let rejected = poll_inbox_with_acceptance(b, false);
+            assert_eq!(rejected.len(), 1, "a rejected callback sees the message");
+
             let inbox = poll_inbox(b);
             assert_eq!(inbox.len(), 1, "exactly one message arrived at B");
+            assert_eq!(
+                inbox[0].4, rejected[0].4,
+                "rejection redelivers the same id"
+            );
             assert_eq!(
                 inbox[0].2.as_slice(),
                 &body[..],
@@ -1362,13 +1638,14 @@ mod tests {
             pump(a, 11, b, 22);
             let inbox = poll_inbox(b);
             assert_eq!(inbox.len(), 1, "exactly one message arrived at B");
-            let (from, cty, got_body, _hops) = &inbox[0];
+            let (from, cty, got_body, _hops, inbox_id) = &inbox[0];
             assert_eq!(from.as_slice(), &aa[..], "from == A's address");
             assert_eq!(cty, "text/plain");
             assert_eq!(got_body.as_slice(), &body[..], "body arrives intact");
+            assert_eq!(inbox_id.len(), 32, "poll exposes a stable inbox id");
 
-            // Draining the inbox is destructive: a second poll is empty.
-            assert!(poll_inbox(b).is_empty(), "inbox drained on first poll");
+            // Returning true from the callback accepts the item, so a second poll is empty.
+            assert!(poll_inbox(b).is_empty(), "inbox accepted on first poll");
             hop_node_free(a);
             hop_node_free(b);
         }
@@ -1470,6 +1747,7 @@ mod tests {
 
     struct SvcRespCollector {
         resps: Vec<SvcRespRow>,
+        accept: bool,
     }
     extern "C" fn svc_resp_sink(
         ctx: *mut c_void,
@@ -1478,7 +1756,7 @@ mod tests {
         status: u16,
         body: *const u8,
         body_len: usize,
-    ) {
+    ) -> bool {
         unsafe {
             let c = &mut *(ctx as *mut SvcRespCollector);
             c.resps.push((
@@ -1487,12 +1765,22 @@ mod tests {
                 status,
                 slice(body, body_len).to_vec(),
             ));
+            c.accept
         }
     }
-    unsafe fn poll_responses(node: *const HopNode) -> Vec<SvcRespRow> {
-        let mut c = SvcRespCollector { resps: Vec::new() };
+    unsafe fn poll_responses_with_acceptance(
+        node: *const HopNode,
+        accept: bool,
+    ) -> Vec<SvcRespRow> {
+        let mut c = SvcRespCollector {
+            resps: Vec::new(),
+            accept,
+        };
         hop_poll_service_responses(node, Some(svc_resp_sink), &mut c as *mut _ as *mut c_void);
         c.resps
+    }
+    unsafe fn poll_responses(node: *const HopNode) -> Vec<SvcRespRow> {
+        poll_responses_with_acceptance(node, false)
     }
 
     #[test]
@@ -1560,6 +1848,49 @@ mod tests {
             );
             assert_eq!(*status, 200u16, "status code round-trips");
             assert_eq!(body.as_slice(), &resp_body[..], "response body round-trips");
+            assert_eq!(
+                poll_responses(a),
+                resps,
+                "a false callback leaves the same response queued"
+            );
+            assert!(
+                hop_accept_service_response(a, req_id.as_ptr()),
+                "explicit acceptance removes the durable response"
+            );
+            assert!(poll_responses(a).is_empty());
+            assert!(!hop_accept_service_response(a, req_id.as_ptr()));
+
+            let mut callback_req_id = [0u8; 32];
+            assert!(hop_send_service_request(
+                a,
+                ba.as_ptr(),
+                service.as_ptr(),
+                method.as_ptr(),
+                args.as_ptr(),
+                args.len(),
+                callback_req_id.as_mut_ptr(),
+            ));
+            pump(a, 11, b, 22);
+            let callback_reqs = poll_requests(b);
+            assert_eq!(callback_reqs.len(), 1);
+            let (from, got_req_id, _, _, _) = &callback_reqs[0];
+            assert_eq!(got_req_id.as_slice(), &callback_req_id);
+            assert!(hop_send_service_response(
+                b,
+                from.as_ptr(),
+                got_req_id.as_ptr(),
+                201,
+                resp_body.as_ptr(),
+                resp_body.len(),
+            ));
+            pump(a, 11, b, 22);
+            let accepted = poll_responses_with_acceptance(a, true);
+            assert_eq!(accepted.len(), 1);
+            assert_eq!(accepted[0].1.as_slice(), &callback_req_id);
+            assert!(
+                poll_responses(a).is_empty(),
+                "a true callback accepts the response"
+            );
             hop_node_free(a);
             hop_node_free(b);
         }

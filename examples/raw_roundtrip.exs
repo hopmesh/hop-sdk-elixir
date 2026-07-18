@@ -37,6 +37,7 @@ N.send_service_response(b, frm, rid, 200, "stored")
 pump.(pump, a, b)
 
 [{_rf, for_id, status, body} | _] = N.take_service_responses(a)
+true = N.accept_service_response(a, for_id)
 IO.puts("A got response: #{status} #{body}  ties to reqId: #{for_id == req_id}")
 
 passed = service == "weather" and status == 200 and body == "stored" and for_id == req_id
