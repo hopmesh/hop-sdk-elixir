@@ -189,8 +189,8 @@ int main(int argc, char **argv) {
     size_t document_length = 0;
     char *document = read_file(argv[1], &document_length);
     const char *document_end = document + document_length;
-    if (uint_field(document, document_end, "bundle_version") != 9) {
-        fail(NULL, "expected bundle corpus version 9");
+    if (uint_field(document, document_end, "bundle_version") != 10) {
+        fail(NULL, "expected bundle corpus version 10");
     }
     const char *bundles = strstr(document, "\"bundles\"");
     const char *array = bundles ? strchr(bundles, '[') : NULL;

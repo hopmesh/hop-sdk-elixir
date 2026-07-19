@@ -11,4 +11,4 @@ cargo build -p hop --manifest-path "$ROOT/Cargo.toml" --no-default-features --fe
 clang -std=c11 -Wall -Wextra -Werror -pedantic \
   "$HERE/wire_vectors.c" -I "$ROOT/sdk" -L "$LIBDIR" -lhop \
   -Wl,-rpath,"$LIBDIR" -o "$BIN"
-"$BIN" "$ROOT/core/hop-core/vectors/bundle-v9.json"
+"$BIN" "$ROOT/core/hop-core/vectors/bundle-v10.json"
