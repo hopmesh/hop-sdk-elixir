@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Regenerate the libhop C ABI header (include/hop.h) from the Rust source, then publish it to the
-# cross-language SDK locations. Run after editing cabi.rs. The header is the bearer/client contract —
+# cross-language SDK locations. Run after editing cabi.rs. The header is the bearer/client contract;
 # NEVER hand-edit any copy; edit cabi.rs + rerun. Every copy is identical and generated.
 set -euo pipefail
 cd "$(dirname "$0")"

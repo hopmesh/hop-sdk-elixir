@@ -1,13 +1,13 @@
-//! libhop — the stable C ABI for hop-core: the universal client SDK.
+//! libhop, the stable C ABI for hop-core: the universal client SDK.
 //!
 //! This is the ONE contract every non-Rust client binds: mobile bearer libs (Swift/Kotlin via the
-//! generated `hop.h`), C/C++ tools, and embedded FULL clients — e.g. an ESP32 that opens a node,
+//! generated `hop.h`), C/C++ tools, and embedded FULL clients, e.g. an ESP32 that opens a node,
 //! secures sessions, and pushes sensor data to a `hops://` service. cbindgen generates
 //! `include/hop.h` from this module (see `cbindgen.toml`).
 //!
-//! It is the poll-model byte seam — link up / bytes in / link down / drain out, keyed by `LinkId`
-//! (u64) + `HopLinkRole` — PLUS the full client surface (open, identity, subscribe, send). Nothing
-//! transport-specific crosses it: no BLE, no beacon, no service id — pure bytes + ids. The optional
+//! It is the poll-model byte seam, link up / bytes in / link down / drain out, keyed by `LinkId`
+//! (u64) + `HopLinkRole`, PLUS the full client surface (open, identity, subscribe, send). Nothing
+//! transport-specific crosses it: no BLE, no beacon, no service id, pure bytes + ids. The optional
 //! UniFFI layer (the rest of this crate) wraps the SAME `HopNode`, so mobile gets ergonomic bindings
 //! while every other target binds this C ABI.
 
@@ -297,7 +297,7 @@ pub unsafe extern "C" fn hop_node_with_secret(
 }
 
 /// Whether this node has durable storage. Returns false when the db path was unusable and the
-/// node is running ephemerally (state will not survive a restart) — the host should surface this
+/// node is running ephemerally (state will not survive a restart); the host should surface this
 /// rather than treat the database as ground truth (F-26). NULL handle ⇒ false.
 #[no_mangle]
 pub unsafe extern "C" fn hop_node_is_persistent(node: *const HopNode) -> bool {
@@ -427,7 +427,7 @@ pub unsafe extern "C" fn hop_link_down(node: *const HopNode, link: u64) {
 // ---- bearer seam: outbound (core -> bearer, POLLED) -------------------------------------------
 
 /// Drain queued outbound packets. Synchronously invokes `sink(ctx, link, bytes_ptr, bytes_len)`
-/// once per packet during this call — this is the POLL model; core never pushes asynchronously.
+/// once per packet during this call. This is the POLL model; core never pushes asynchronously.
 /// The byte pointer is valid only for the duration of each `sink` call; copy what you keep.
 #[no_mangle]
 pub unsafe extern "C" fn hop_drain_outgoing(
@@ -613,7 +613,7 @@ pub unsafe extern "C" fn hop_message_status(
     })
 }
 
-/// True iff messaging `addr` (32 bytes) is forward-secret — a ratchet session exists (DESIGN.md §25)
+/// True iff messaging `addr` (32 bytes) is forward-secret: a ratchet session exists (DESIGN.md §25)
 /// rather than a static seal. Drives a lock indicator. False on NULL.
 #[no_mangle]
 pub unsafe extern "C" fn hop_is_secured(node: *const HopNode, addr: *const u8) -> bool {
@@ -623,7 +623,7 @@ pub unsafe extern "C" fn hop_is_secured(node: *const HopNode, addr: *const u8) -
     )
 }
 
-// ---- hops:// request/response (a FULL round trip — HDP in BOTH directions) --------------------
+// ---- hops:// request/response (a FULL round trip, HDP in BOTH directions) --------------------
 //
 // Distinct from `hop_send_message` (a one-way HDP datagram whose only "response" is the network
 // delivery-ACK): a hops:// service request expects a sealed RESPONSE back over the network. The
@@ -951,7 +951,7 @@ pub unsafe extern "C" fn hop_address_from_base58(text: *const c_char, out32: *mu
     }
 }
 
-/// Send a message to the 32-byte address `dst` — untraceable by default (DESIGN.md §39).
+/// Send a message to the 32-byte address `dst`, untraceable by default (DESIGN.md §39).
 /// `content_type` is a UTF-8 C string (e.g. "text/plain"); `body`/`body_len` is the payload. If
 /// `request_ack`, a private delivery confirmation is requested. On success writes the 32-byte
 /// bundle id into `out_id` (room for 32 bytes, may be NULL to ignore) and returns true.

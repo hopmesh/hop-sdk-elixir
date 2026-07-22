@@ -1,9 +1,9 @@
-// smoke.c — proves libhop's C ABI runs the real Hop protocol end to end, in pure C.
+// smoke.c: proves libhop's C ABI runs the real Hop protocol end to end, in pure C.
 //
 // Two in-memory nodes (A, B) are wired by a "loopback bearer": each node's drained outbound bytes
 // are fed straight into the other's hop_bytes_received. We pump that loop while ticking the clock,
 // which carries the Noise handshake + §25 prekey gossip; then A sends B an untraceable (§39) message
-// and we poll B's inbox until it arrives. No radio, no Swift/Kotlin — just hop.h.
+// and we poll B's inbox until it arrives. No radio, no Swift/Kotlin, just hop.h.
 //
 // Build+run is driven by smoke.sh.
 
@@ -94,7 +94,7 @@ int main(void) {
 
     uint8_t msg_id[32];
     const char *text = "hello over the C ABI";
-    // request_ack=1 so B seals a private delivery-ACK back to A (§39) — proves the return path too.
+    // request_ack=1 so B seals a private delivery-ACK back to A (§39), proves the return path too.
     if (!hop_send_message(a, b_addr, "text/plain", (const uint8_t *)text, strlen(text), 1, msg_id)) {
         printf("FAIL: send_message returned false\n"); return 1;
     }

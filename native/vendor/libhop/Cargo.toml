@@ -4,10 +4,10 @@ version.workspace = true
 edition.workspace = true
 license-file = "LICENSE.md"
 repository.workspace = true
-description = "Cross-platform bindings for Hop (Swift/Kotlin via UniFFI — DESIGN.md §12)."
+description = "Cross-platform bindings for Hop (Swift/Kotlin via UniFFI, DESIGN.md §12)."
 
 [lib]
-# The compiled artifact is `libhop` (the C ABI / universal SDK — see src/cabi.rs + sdk/hop.h),
+# The compiled artifact is `libhop` (the C ABI / universal SDK; see src/cabi.rs + sdk/hop.h),
 # The crate is `hop` and the UniFFI namespace is `hop` (uniffi.hop), matching the lib.
 name = "hop"
 # cdylib/staticlib are what the iOS/Android builds link against; lib keeps it
@@ -24,7 +24,7 @@ hop-endpoint-core.workspace = true
 # in-memory store from hop-core, so this dependency is not compiled for a constrained target.
 hop-store-sqlite = { workspace = true, default-features = false, optional = true }
 # OPTIONAL (core-ffi-03): UniFFI scaffolding (the Swift/Kotlin ergonomic layer) is NOT compiled for a
-# constrained target — the `minimal` build exposes ONLY the cbindgen C ABI (`cabi.rs`), which is all an
+# constrained target; the `minimal` build exposes ONLY the cbindgen C ABI (`cabi.rs`), which is all an
 # ESP32 / bare-C client needs.
 uniffi = { version = "0.32", optional = true }
 thiserror.workspace = true

@@ -3,7 +3,7 @@
 //! The cross-platform binding surface (DESIGN.md §12): a thin, UniFFI-exported
 //! wrapper around [`hop_core::node::Node`]. The host app links this (as a
 //! `cdylib`/`staticlib`), runs the BLE bearer natively, and drives the node loop
-//! through [`HopNode`] — feeding connection/data events in, draining outgoing
+//! through [`HopNode`], feeding connection/data events in, draining outgoing
 //! bytes out, and reading the inbox.
 //!
 //! Native bindings (Swift/Kotlin) are generated from this crate with the
@@ -44,7 +44,7 @@ compile_error!(
      `--no-default-features` build (neither) is the embedded surface."
 );
 
-/// libhop — the stable C ABI (cbindgen → `include/hop.h`): the universal client SDK + bearer seam,
+/// libhop, the stable C ABI (cbindgen → `include/hop.h`): the universal client SDK + bearer seam,
 /// for every non-UniFFI target (C/C++, ESP32, …). Wraps the SAME `HopNode` as the UniFFI surface.
 pub mod cabi;
 
@@ -78,7 +78,7 @@ fn hex8(b: &[u8; 8]) -> String {
     b.iter().map(|x| format!("{x:02x}")).collect()
 }
 
-/// The 8-byte short form of a full address — matches what trace hops carry, so the app
+/// The 8-byte short form of a full address, matches what trace hops carry, so the app
 /// can index its known addresses by this and resolve trace hops to display names (§27).
 #[cfg_attr(feature = "full", uniffi::export)]
 pub fn short_address(address: Vec<u8>) -> Vec<u8> {
@@ -88,7 +88,7 @@ pub fn short_address(address: Vec<u8>) -> Vec<u8> {
     }
 }
 
-/// The built-in identity service name (`hop.identify`) — call it on a peer to learn its
+/// The built-in identity service name (`hop.identify`): call it on a peer to learn its
 /// display name + kind (DESIGN.md §29).
 #[cfg_attr(feature = "full", uniffi::export)]
 pub fn service_identify() -> String {
@@ -144,7 +144,7 @@ pub struct InboxMessage {
     pub body: Vec<u8>,
     /// How many hops it travelled to reach us (A→B path length).
     pub hops: u8,
-    /// Sender's clock (ms) when the message was created — signed by the sender.
+    /// Sender's clock (ms) when the message was created, signed by the sender.
     /// Subtract from local receive time for an end-to-end latency estimate.
     pub created_at: u64,
     /// Provenance: one hop per node that forwarded this message, in order (DESIGN.md
@@ -180,7 +180,7 @@ pub struct IdentityInfo {
 #[cfg_attr(feature = "full", derive(uniffi::Record))]
 pub struct ServiceReq {
     pub from: Vec<u8>,
-    /// Request id — pass back to `send_service_response` as `for_request_id`.
+    /// Request id. Pass back to `send_service_response` as `for_request_id`.
     pub request_id: Vec<u8>,
     pub service: String,
     pub method: String,
@@ -199,11 +199,11 @@ pub struct ServiceResp {
 }
 
 /// A service advert discovered via gossip (direct or relayed). The `publisher` is
-/// the address to message — its sealing key is derived from it. Apps build presence
+/// the address to message; its sealing key is derived from it. Apps build presence
 /// and contacts on this (e.g. a "presence" service whose `title` is a display name).
 #[cfg_attr(feature = "full", derive(uniffi::Record))]
 pub struct ServiceHit {
-    /// Publisher's hop address (Ed25519 public key) — message this to reach them.
+    /// Publisher's hop address (Ed25519 public key); message this to reach them.
     pub publisher: Vec<u8>,
     pub service: String,
     pub title: String,
@@ -211,7 +211,7 @@ pub struct ServiceHit {
     pub tags: Vec<String>,
     /// Hops away through the mesh (1 = direct neighbour, ≥2 = via relays; 0 = unknown).
     pub hops: u8,
-    /// Publisher clock (ms) when this advert was created — lets the app pick the
+    /// Publisher clock (ms) when this advert was created, lets the app pick the
     /// freshest record per publisher (e.g. current foreground/background state).
     pub created_at: u64,
 }
@@ -372,7 +372,7 @@ pub struct HpsTopicInfo {
     pub access: HpsAccess,
 }
 
-/// A topic we host or follow — for rebuilding the app's channel list after a restart.
+/// A topic we host or follow, for rebuilding the app's channel list after a restart.
 #[cfg_attr(feature = "full", derive(uniffi::Record))]
 pub struct HpsMyTopic {
     pub host: Vec<u8>,
@@ -432,7 +432,7 @@ pub struct MessageStatus {
     pub delivered: bool,
     /// Forward path length the destination observed (hops to delivery; 0 until delivered).
     pub delivery_hops: u8,
-    /// **Forward-path** (A→B) latency in ms the destination observed and reported in its ACK —
+    /// **Forward-path** (A→B) latency in ms the destination observed and reported in its ACK:
     /// how long the message took to *reach* the recipient, NOT the round trip. 0 until delivered.
     pub delivery_ms: u32,
 }
@@ -472,7 +472,7 @@ pub struct HopNode {
     /// unusable even after quarantine, so the host can tell the difference between persistent
     /// and silently-ephemeral (F-26). `new`/`with_secret` are ephemeral by construction.
     persistent: bool,
-    /// How many persisted records failed to decode on startup (F-03) — non-zero means an
+    /// How many persisted records failed to decode on startup (F-03); non-zero means an
     /// upgrade changed a struct layout and dropped state; the host should surface it.
     rehydrate_dropped: u32,
 }
@@ -480,7 +480,7 @@ pub struct HopNode {
 /// Open the persistent store, or if the file is unusable, quarantine it and retry once so a
 /// corrupt/read-only db becomes a clean fresh start rather than permanent per-launch amnesia.
 /// Returns `(store, persistent)`; only falls back to in-memory if even a fresh file won't open.
-/// See F-26 — the old code did `open(path).or_else(in_memory)`, so a bad path silently ran
+/// See F-26: the old code did `open(path).or_else(in_memory)`, so a bad path silently ran
 /// ephemeral forever with no signal to the host. (core-ffi-03: SQLite-only, so it is compiled only
 /// for the `full` build; the embedded build has no SQLite.)
 #[cfg(feature = "full")]
@@ -492,7 +492,7 @@ fn open_store_persistent(db_path: &str, key: &[u8]) -> (HopStore, bool) {
         return (s, true);
     }
 
-    // stores-05 / android-01: a KEYED open of an EXISTING db failed. Never quarantine-wipe here — a
+    // stores-05 / android-01: a KEYED open of an EXISTING db failed. Never quarantine-wipe here, a
     // transient wrong key (e.g. a config path that forgot to pass the key, then a keyed restart) must
     // not destroy sessions/prekeys/queued sends. Two sub-cases:
     if !key.is_empty() && std::path::Path::new(db_path).exists() {
@@ -666,7 +666,7 @@ impl HopNode {
     }
 
     /// Open a node with **persistent** storage at `db_path` (messages survive
-    /// restarts; bounded — older relayed messages are evicted to make room), a
+    /// restarts, bounded: older relayed messages are evicted to make room), a
     /// saved identity secret, and a 32-byte **app secret** that isolates this app's
     /// `hps://` channels/services from other apps (DESIGN.md §32). Pass empty/short
     /// app-secret bytes to stay on the open shared fabric. If the path can't be opened it is
@@ -698,7 +698,7 @@ impl HopNode {
         }
         #[cfg(not(feature = "full"))]
         {
-            let _ = (&db_path, &key); // no persistence on a constrained target — run ephemeral
+            let _ = (&db_path, &key); // no persistence on a constrained target, run ephemeral
             let mut node = Node::with_store(identity_from(&secret), fresh_ephemeral_store());
             if let Ok(s) = <[u8; 32]>::try_from(app_secret.as_slice()) {
                 node.set_app_keys(hop_core::app::AppKeys::from_secret(s));
@@ -726,7 +726,7 @@ impl HopNode {
     }
 
     // Note: there is intentionally no `set_app` here. End-user devices must NOT stamp
-    // their app id into trace hops — that would advertise which app a device runs to
+    // their app id into trace hops, that would advertise which app a device runs to
     // every relay on the path (DESIGN.md §27 privacy). Devices stay on FABRIC_APP;
     // only infra relays self-identify (hop-relayd calls Node::set_app(relay_app_id())).
 
@@ -779,7 +779,7 @@ impl HopNode {
         self.node().subscribe(topic);
     }
 
-    /// Send a peer message to `dst` (an address — sealing key is derived from it).
+    /// Send a peer message to `dst` (an address, sealing key is derived from it).
     /// **Untraceable by default** (DESIGN.md §39): no cleartext src/dst, the bundle floods
     /// and is recognized only by `dst`. Still forward-secret + sender-authenticated. Returns
     /// the bundle id. Set `request_ack` for a private delivery confirmation.
@@ -798,7 +798,7 @@ impl HopNode {
         Ok(id.to_vec())
     }
 
-    /// Send a peer message to `dst` with full §27 provenance — cleartext src/dst, route
+    /// Send a peer message to `dst` with full §27 provenance, cleartext src/dst, route
     /// learning, relay-vaccinating ACKs. The **opt-in traced** path; prefer [`Self::send_message`]
     /// (untraceable) unless the user has explicitly chosen a traceable send.
     pub fn send_message_traced(
@@ -817,7 +817,7 @@ impl HopNode {
     }
 
     /// Publish a signed service advert that gossips across the mesh (even multiple
-    /// hops away). Returns the advert id. Apps build presence on this — e.g. publish
+    /// hops away). Returns the advert id. Apps build presence on this, e.g. publish
     /// a "presence" service whose `title` is the user's display name. `ttlMs` bounds
     /// how long the record lives before it must be refreshed.
     pub fn publish_service(
@@ -929,7 +929,7 @@ impl HopNode {
         }
     }
 
-    /// Live links `(address, link id)` — the host maps link ids to transports to show
+    /// Live links `(address, link id)`: the host maps link ids to transports to show
     /// the route to each direct neighbour.
     pub fn peer_links(&self) -> Vec<PeerLink> {
         self.node()
@@ -1159,7 +1159,7 @@ impl HopNode {
         Ok(id.to_vec())
     }
 
-    /// Decline a received invite — drops it from durable storage so it won't reappear on restart.
+    /// Decline a received invite, drops it from durable storage so it won't reappear on restart.
     pub fn hps_decline_invite(
         &self,
         host: Vec<u8>,
@@ -1261,7 +1261,7 @@ impl HopNode {
             .collect()
     }
 
-    /// Topics this node hosts or follows — the app calls this at startup to rebuild its channel
+    /// Topics this node hosts or follows; the app calls this at startup to rebuild its channel
     /// list, since the node persists topics but the app's in-memory list doesn't.
     pub fn hps_my_topics(&self) -> Vec<HpsMyTopic> {
         self.node()
@@ -1648,7 +1648,7 @@ mod tests {
         let b = HopNode::new();
 
         // Publish prekeys (as a real device does at startup) so a forward-secret session can
-        // form — content is never static-sealed; it defers until a prekey is known (DESIGN.md §25).
+        // form; content is never static-sealed, and it defers until a prekey is known (DESIGN.md §25).
         a.publish_prekey().unwrap();
         b.publish_prekey().unwrap();
 
