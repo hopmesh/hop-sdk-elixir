@@ -8,6 +8,7 @@ git-cliff. Do not edit by hand.
 - close adversarial protocol gaps (cad3deb)
 
 ### Features
+- auto-generate monorepo + per-library changelogs (git-cliff) (8c64c37)
 - phase 3 hold-until-coordinated quorum (CP; never double-process) (#159) (ab0f376)
 - phase 2 rendezvous ownership (exactly-once when the owner is up) (#155) (6547ca8)
 - self-clustering endpoints (phase 1 dedup) as a hop-endpoint-core layer over the mesh (#153) (487e4d2)

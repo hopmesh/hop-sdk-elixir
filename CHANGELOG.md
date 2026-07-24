@@ -20,6 +20,8 @@ git-cliff. Do not edit by hand.
 - stop mentioning DNSSEC (no longer part of the design) (179a278)
 
 ### Features
+- finish inbound (import), drop export_pr (41c095e)
+- auto-generate monorepo + per-library changelogs (git-cliff) (8c64c37)
 - expose the endpoint CP quorum setter in all six SDKs (#161) (1bc8eef)
 - cluster bindings across all six SDKs (+ passphrase ABI entry) (#154) (afb1632)
 - example parity + in-process dev certs across go/python/node/elixir (#133) (d58c460)

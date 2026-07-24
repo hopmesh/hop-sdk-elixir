@@ -13,6 +13,7 @@ git-cliff. Do not edit by hand.
 - bump create-github-app-token to v3.2.0 across all mirrored components (efc9f6c)
 
 ### Chore
+- purge em-dashes and en-dashes from source (d222435)
 - drop the root license, license per-component (FSL-1.1-ALv2) (#146) (be2a5a7)
 
 ### Dependencies
@@ -24,6 +25,8 @@ git-cliff. Do not edit by hand.
 - record remediation results (8f69d08)
 
 ### Features
+- finish inbound (import), drop export_pr (41c095e)
+- auto-generate monorepo + per-library changelogs (git-cliff) (8c64c37)
 - phase 3 hold-until-coordinated quorum (CP; never double-process) (#159) (ab0f376)
 - cluster bindings across all six SDKs (+ passphrase ABI entry) (#154) (afb1632)
 - self-clustering endpoints (phase 1 dedup) as a hop-endpoint-core layer over the mesh (#153) (487e4d2)
