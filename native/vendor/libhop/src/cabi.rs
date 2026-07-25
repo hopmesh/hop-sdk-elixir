@@ -97,7 +97,12 @@ unsafe fn bounded_slice<'a>(p: *const u8, len: usize, max: usize) -> Option<&'a 
 /// function. A wrapper should assert `hop_abi_version() == HOP_ABI_VERSION` at load so a wrapper
 /// built against a newer header fails loudly instead of drifting silently (F-28). This is the
 /// *ABI* version and is independent of the *wire* format version (bundle.rs `BUNDLE_VERSION`).
-pub const HOP_ABI_VERSION: u32 = 4;
+///
+/// v4 -> v5: added the §19 relay-pool calls (`hop_relay_add`, `hop_relay_next`,
+/// `hop_relay_report`, `hop_relay_pool_size`). Additive, so a v4 caller still links, but the bump
+/// is what lets a wrapper assert it can actually reach failover instead of silently dialing one
+/// hardcoded URL forever.
+pub const HOP_ABI_VERSION: u32 = 5;
 
 /// Returns the ABI version this shared library implements (see [`HOP_ABI_VERSION`]).
 #[no_mangle]
@@ -361,6 +366,84 @@ pub unsafe extern "C" fn hop_node_set_name(node: *const HopNode, name: *const c_
         if let (Some(node), Some(name)) = (node_ref(node), cstr(name)) {
             node.set_name(name.to_string());
         }
+    })
+}
+
+// ---- relay pool (DESIGN.md §19) ---------------------------------------------------------------
+//
+// A node's internet reach used to be one hardcoded URL, so one operator going dark took reach to
+// zero. These four calls let a driver hold many candidates and fail over, with the backoff and
+// eviction policy living in Rust so every platform shares one tested implementation.
+
+/// Offer a relay endpoint to the pool. `configured` non-zero marks an operator/user choice, which
+/// a gossiped endpoint can never demote. Returns true if the endpoint is now pooled.
+#[no_mangle]
+pub unsafe extern "C" fn hop_relay_add(
+    node: *const HopNode,
+    url: *const c_char,
+    configured: bool,
+) -> bool {
+    catch(false, || match (node_ref(node), cstr(url)) {
+        (Some(node), Some(url)) => node.relay_add(url, configured),
+        _ => false,
+    })
+}
+
+/// Write the relay the host should dial right now into `out` (`out_cap` bytes incl. NUL) and return
+/// its length. Returns 0 when there is nothing to dial, which means either an empty pool OR every
+/// candidate backed off; the latter is a WAIT-and-retry state, not permanent loss of reach. Use
+/// [`hop_relay_pool_size`] to tell them apart.
+#[no_mangle]
+pub unsafe extern "C" fn hop_relay_next(
+    node: *const HopNode,
+    out: *mut c_char,
+    out_cap: usize,
+) -> usize {
+    catch(0, || {
+        let Some(node) = node_ref(node) else {
+            return 0;
+        };
+        if out.is_null() || out_cap == 0 {
+            return 0;
+        }
+        let url = node.relay_next();
+        let b = url.as_bytes();
+        if b.is_empty() || b.len() + 1 > out_cap {
+            return 0;
+        }
+        std::ptr::copy_nonoverlapping(b.as_ptr(), out as *mut u8, b.len());
+        *out.add(b.len()) = 0; // NUL-terminate
+        b.len()
+    })
+}
+
+/// Report a dial outcome so the pool can score it. A success clears that endpoint's failure
+/// history; failures back it off exponentially and always eventually recover.
+#[no_mangle]
+pub unsafe extern "C" fn hop_relay_report(node: *const HopNode, url: *const c_char, ok: bool) {
+    catch((), || {
+        if let (Some(node), Some(url)) = (node_ref(node), cstr(url)) {
+            node.relay_report(url, ok);
+        }
+    })
+}
+
+/// Total pooled endpoints, and how many are dialable right now, via `out_available` (may be NULL).
+/// `size > 0` with `available == 0` is the degraded "everything backed off" state a UI should show
+/// as such rather than as offline.
+#[no_mangle]
+pub unsafe extern "C" fn hop_relay_pool_size(
+    node: *const HopNode,
+    out_available: *mut usize,
+) -> usize {
+    catch(0, || {
+        let Some(node) = node_ref(node) else {
+            return 0;
+        };
+        if !out_available.is_null() {
+            *out_available = node.relay_pool_available() as usize;
+        }
+        node.relay_pool_size() as usize
     })
 }
 

@@ -21,7 +21,12 @@
 // function. A wrapper should assert `hop_abi_version() == HOP_ABI_VERSION` at load so a wrapper
 // built against a newer header fails loudly instead of drifting silently (F-28). This is the
 // *ABI* version and is independent of the *wire* format version (bundle.rs `BUNDLE_VERSION`).
-#define HOP_ABI_VERSION 4
+//
+// v4 -> v5: added the §19 relay-pool calls (`hop_relay_add`, `hop_relay_next`,
+// `hop_relay_report`, `hop_relay_pool_size`). Additive, so a v4 caller still links, but the bump
+// is what lets a wrapper assert it can actually reach failover instead of silently dialing one
+// hardcoded URL forever.
+#define HOP_ABI_VERSION 5
 
 // Which side opened a bearer link (the Noise role). Mirrors hop-core's internal `Role`.
 typedef enum HopLinkRole {
@@ -114,6 +119,25 @@ uintptr_t hop_node_secret(const struct HopNode *node, uint8_t *out);
 
 // Set the display name this node reports via presence / `hop.identify` (DESIGN.md §29).
 void hop_node_set_name(const struct HopNode *node, const char *name);
+
+// Offer a relay endpoint to the pool. `configured` non-zero marks an operator/user choice, which
+// a gossiped endpoint can never demote. Returns true if the endpoint is now pooled.
+bool hop_relay_add(const struct HopNode *node, const char *url, bool configured);
+
+// Write the relay the host should dial right now into `out` (`out_cap` bytes incl. NUL) and return
+// its length. Returns 0 when there is nothing to dial, which means either an empty pool OR every
+// candidate backed off; the latter is a WAIT-and-retry state, not permanent loss of reach. Use
+// [`hop_relay_pool_size`] to tell them apart.
+uintptr_t hop_relay_next(const struct HopNode *node, char *out, uintptr_t out_cap);
+
+// Report a dial outcome so the pool can score it. A success clears that endpoint's failure
+// history; failures back it off exponentially and always eventually recover.
+void hop_relay_report(const struct HopNode *node, const char *url, bool ok);
+
+// Total pooled endpoints, and how many are dialable right now, via `out_available` (may be NULL).
+// `size > 0` with `available == 0` is the degraded "everything backed off" state a UI should show
+// as such rather than as offline.
+uintptr_t hop_relay_pool_size(const struct HopNode *node, uintptr_t *out_available);
 
 // Advance authenticated protocol time: expire adverts, retransmit unacked bundles, and prune dedup.
 // `now_ms` must be plausible, non-regressing Unix epoch milliseconds from synchronized wall time.

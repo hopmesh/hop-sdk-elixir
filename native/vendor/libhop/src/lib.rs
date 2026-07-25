@@ -1415,6 +1415,41 @@ impl HopNode {
         self.node().set_name(name);
     }
 
+    // --- §19 relay pool -------------------------------------------------------
+    //
+    // The bearer dials; the node decides WHERE. Exposed so a driver gets failover from the one
+    // tested Rust implementation instead of each platform writing its own (the failure mode that
+    // made the per-platform BLE dial backoff a live bug).
+
+    /// Offer a relay endpoint to the pool. `configured` marks an operator/user choice, which a
+    /// gossiped endpoint can never demote.
+    pub fn relay_add(&self, url: &str, configured: bool) -> bool {
+        self.node().relay_add(url, configured)
+    }
+
+    /// The relay to dial right now. Empty string means "every candidate is backed off, wait and
+    /// retry", which is NOT the same as having no reach.
+    pub fn relay_next(&self) -> String {
+        self.node().relay_next().unwrap_or_default()
+    }
+
+    /// Report a dial outcome so the pool can score it.
+    pub fn relay_report(&self, url: &str, ok: bool) {
+        self.node().relay_report(url, ok)
+    }
+
+    /// How many relay endpoints are pooled. Two scalars rather than a tuple because UniFFI
+    /// cannot lower a tuple return across the FFI boundary.
+    pub fn relay_pool_size(&self) -> u32 {
+        self.node().relay_pool_stats().0 as u32
+    }
+
+    /// How many pooled endpoints are dialable right now. `relay_pool_size() > 0` with this at 0 is
+    /// the degraded "everything backed off" state, which a UI should distinguish from offline.
+    pub fn relay_pool_available(&self) -> u32 {
+        self.node().relay_pool_stats().1 as u32
+    }
+
     /// This node's display name (empty string if unset).
     pub fn name(&self) -> String {
         self.node().name().unwrap_or_default().to_string()
