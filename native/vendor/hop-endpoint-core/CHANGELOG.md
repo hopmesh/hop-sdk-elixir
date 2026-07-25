@@ -7,6 +7,9 @@ git-cliff. Do not edit by hand.
 ### Bug Fixes
 - close adversarial protocol gaps (cad3deb)
 
+### Documentation
+- regenerate from conventional commits (a355901)
+
 ### Features
 - auto-generate monorepo + per-library changelogs (git-cliff) (8c64c37)
 - phase 3 hold-until-coordinated quorum (CP; never double-process) (#159) (ab0f376)

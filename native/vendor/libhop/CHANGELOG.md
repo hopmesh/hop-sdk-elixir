@@ -20,6 +20,7 @@ git-cliff. Do not edit by hand.
 - land the grouped rust-dependencies bump (sha2, ed25519/x25519-dalek, chacha20poly1305, snow, rusqlite, p256, uniffi, tungstenite) (#89) (2038ce9)
 
 ### Documentation
+- regenerate from conventional commits (a355901)
 - branded, marketable READMEs for every sub-repo (9c2a477)
 - stop mentioning DNSSEC (no longer part of the design) (179a278)
 - record remediation results (8f69d08)
@@ -33,6 +34,8 @@ git-cliff. Do not edit by hand.
 - self-certifying reachability records (core + ABI) for DNS-free endpoint discovery (#126) (7c31123)
 
 ### Other
+- wire the relay pool end to end, and stop the wire guard false-firing (35946e0)
+- one-time prekeys for async first contact (wire v11) (d6ebce3)
 - CLA gate on contributions (preserve commercial relicensing of core) (5a9aa7d)
 - SECURITY.md per component + enable-security in the bootstrap script (a1492e9)
 - copyright holder is Hop Mesh, LLC (7d8c514)
