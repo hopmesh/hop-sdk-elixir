@@ -173,6 +173,29 @@ static void check_fixed_hex(const char *name, const char *hex, const uint8_t *ac
     free(expected);
 }
 
+/* Check a variable-width prefix stored left-aligned in a fixed-width slot: the prefix bytes must
+   match the corpus, and every remaining byte of the slot must be zero padding. */
+static void check_variable_prefix_in_slot(const char *name, const char *hex, const uint8_t *actual,
+                                          size_t slot_width) {
+    size_t expected_length = 0;
+    uint8_t *expected = decode_hex(hex, &expected_length);
+    if (expected_length == 0) {
+        for (size_t index = 0; index < slot_width; index++) {
+            if (actual[index] != 0) fail(name, "non-applicable metadata is not zero-filled");
+        }
+    } else if (expected_length > slot_width) {
+        fail(name, "prefix is wider than its fixed ABI slot");
+    } else {
+        if (memcmp(actual, expected, expected_length) != 0) {
+            fail(name, "fixed metadata bytes differ from corpus");
+        }
+        for (size_t index = expected_length; index < slot_width; index++) {
+            if (actual[index] != 0) fail(name, "prefix slot padding is not zero");
+        }
+    }
+    free(expected);
+}
+
 static uint8_t integrity_code(const char *name, const char *kind) {
     if (strcmp(kind, "Ed25519Signature") == 0) return 0;
     if (strcmp(kind, "PrivateWireId") == 0) return 1;
@@ -183,14 +206,25 @@ static uint8_t integrity_code(const char *name, const char *kind) {
 
 int main(int argc, char **argv) {
     if (argc != 2) {
-        fprintf(stderr, "usage: %s core/hop-core/vectors/bundle-v9.json\n", argv[0]);
+        fprintf(stderr, "usage: %s core/hop-core/vectors/bundle-v<N>.json\n", argv[0]);
         return 2;
     }
     size_t document_length = 0;
     char *document = read_file(argv[1], &document_length);
     const char *document_end = document + document_length;
-    if (uint_field(document, document_end, "bundle_version") != 11) {
-        fail(NULL, "expected bundle corpus version 11");
+    /* Derive the expected version from the FILENAME rather than hardcoding it. The corpus is renamed
+       bundle-v<N>.json on every BUNDLE_VERSION bump, so a literal here rots silently: this held 11
+       (and its usage string still advertised v9) until the v12 bump reddened CI. Parsing the name
+       also makes this a real check, that the file's contents agree with the version it claims to be,
+       instead of a constant somebody has to remember to edit. */
+    const char *base = strrchr(argv[1], '/');
+    base = base ? base + 1 : argv[1];
+    unsigned long expected_version = 0;
+    if (sscanf(base, "bundle-v%lu.json", &expected_version) != 1) {
+        fail(NULL, "corpus filename is not bundle-v<N>.json");
+    }
+    if (uint_field(document, document_end, "bundle_version") != expected_version) {
+        fail(NULL, "corpus contents disagree with the version in its filename");
     }
     const char *bundles = strstr(document, "\"bundles\"");
     const char *array = bundles ? strchr(bundles, '[') : NULL;
@@ -270,7 +304,12 @@ int main(int argc, char **argv) {
         if (metadata[META_MAILBOX_PRESENT] != (uint8_t)mailbox_present) {
             fail(name, "mailbox presence differs from corpus");
         }
-        check_fixed_hex(name, mailbox_hex, metadata + META_MAILBOX, 2);
+        /* The mailbox ABI slot is a FIXED 2 bytes carrying a VARIABLE-WIDTH routing prefix
+           (MAILBOX_ROUTE_PREFIX_BYTES, a privacy dial that narrowed 2 -> 1 in wire v12),
+           left-aligned and zero-padded. Comparing the whole slot would fail on width alone and
+           would also let a dirty pad through, so check the two halves of the contract separately,
+           exactly as sim/wire-vector-check.mjs does on the JS side. */
+        check_variable_prefix_in_slot(name, mailbox_hex, metadata + META_MAILBOX, 2);
         if (metadata[META_INTEGRITY_KIND] != integrity_code(name, integrity)) {
             fail(name, "integrity mode differs from corpus");
         }

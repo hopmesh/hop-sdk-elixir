@@ -119,6 +119,12 @@ pub extern "C" fn hop_abi_version() -> u32 {
 /// `integrity_kind` is 0 for an Ed25519-signed bundle, 1 for a private wire ID, and 2 for a vaccine
 /// ID. Fields that do not apply are zero-filled. Returns false on invalid pointers or lengths,
 /// decode/verification failure, a non-canonical encoding, or an output buffer shorter than 211 bytes.
+///
+/// `mailbox` is a FIXED 2-byte slot carrying a VARIABLE-WIDTH routing prefix, left-aligned and
+/// zero-padded. Its width is a privacy dial (`MAILBOX_ROUTE_PREFIX_BYTES`, which sets the recipient
+/// anonymity set and narrowed 2 -> 1 in wire v12). Keeping the SLOT fixed lets that dial turn without
+/// disturbing this published layout, so it costs no ABI bump and no SDK churn. Read
+/// `mailbox_present` first; the padding bytes are always zero.
 #[no_mangle]
 pub unsafe extern "C" fn hop_validate_wire_bundle(
     bytes: *const u8,
@@ -192,7 +198,13 @@ fn validated_wire_metadata(bytes: &[u8]) -> Option<[u8; HOP_WIRE_BUNDLE_METADATA
             .copy_from_slice(&header.ephemeral);
         if let Some(mailbox) = header.mailbox {
             metadata[WIRE_META_MAILBOX_PRESENT] = 1;
-            metadata[WIRE_META_MAILBOX..WIRE_META_INTEGRITY_KIND].copy_from_slice(&mailbox);
+            // The ABI slot is a FIXED 2 bytes holding a VARIABLE-WIDTH prefix, left-aligned and zero-padded.
+            // crypto::MAILBOX_ROUTE_PREFIX_BYTES is a privacy dial (it sets the recipient anonymity
+            // set) and moved 2 -> 1 in wire v12. Keeping the slot fixed means that dial can turn
+            // without breaking the published layout that nine SDK wrappers parse, so it costs no
+            // HOP_ABI_VERSION bump. Copying the whole slot instead panics the moment the two differ.
+            metadata[WIRE_META_MAILBOX..WIRE_META_MAILBOX + mailbox.len()]
+                .copy_from_slice(&mailbox);
         }
         metadata[WIRE_META_INTEGRITY_KIND] = 1;
     } else if matches!(&bundle.inner.dst, Destination::Vaccine(_)) {

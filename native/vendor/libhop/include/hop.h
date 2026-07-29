@@ -56,6 +56,12 @@ uint32_t hop_abi_version(void);
 // `integrity_kind` is 0 for an Ed25519-signed bundle, 1 for a private wire ID, and 2 for a vaccine
 // ID. Fields that do not apply are zero-filled. Returns false on invalid pointers or lengths,
 // decode/verification failure, a non-canonical encoding, or an output buffer shorter than 211 bytes.
+//
+// `mailbox` is a FIXED 2-byte slot carrying a VARIABLE-WIDTH routing prefix, left-aligned and
+// zero-padded. Its width is a privacy dial (`MAILBOX_ROUTE_PREFIX_BYTES`, which sets the recipient
+// anonymity set and narrowed 2 -> 1 in wire v12). Keeping the SLOT fixed lets that dial turn without
+// disturbing this published layout, so it costs no ABI bump and no SDK churn. Read
+// `mailbox_present` first; the padding bytes are always zero.
 bool hop_validate_wire_bundle(const uint8_t *bytes,
                               uintptr_t len,
                               uint8_t *out_metadata,
