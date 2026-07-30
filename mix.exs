@@ -4,7 +4,7 @@ defmodule Hop.MixProject do
   def project do
     [
       app: :hop_endpoint,
-      version: "0.0.1",
+      version: "0.0.2",
       elixir: "~> 1.15",
       deps: deps(),
       source_url: "https://github.com/hopmesh/hop-sdk-elixir",
