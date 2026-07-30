@@ -16,6 +16,7 @@ git-cliff. Do not edit by hand.
 - drop the root license, license per-component (FSL-1.1-ALv2) (#146) (be2a5a7)
 
 ### Documentation
+- regenerate from conventional commits (b96e019)
 - regenerate from conventional commits (330c8c6)
 - regenerate from conventional commits (096180b)
 - regenerate from conventional commits (102ae67)
@@ -34,6 +35,8 @@ git-cliff. Do not edit by hand.
 - Elixir endpoint SDK via a Rustler NIF (Phoenix/Plug-shaped, proven) (#122) (627c4b3)
 
 ### Other
+- bump our crates in every standalone/vendored Cargo.lock (aad3ff7)
+- bump every published component to 0.0.2 (7b1ffab)
 - CLA gate on contributions (preserve commercial relicensing of core) (5a9aa7d)
 - SECURITY.md per component + enable-security in the bootstrap script (a1492e9)
 - copyright holder is Hop Mesh, LLC (7d8c514)
