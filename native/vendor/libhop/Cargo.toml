@@ -2,7 +2,7 @@
 name = "hop"
 version.workspace = true
 edition.workspace = true
-license-file = "LICENSE.md"
+license = "Apache-2.0"
 repository.workspace = true
 description = "Cross-platform bindings for Hop (Swift/Kotlin via UniFFI, DESIGN.md §12)."
 
