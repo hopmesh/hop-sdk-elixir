@@ -7,7 +7,11 @@ git-cliff. Do not edit by hand.
 ### Bug Fixes
 - close adversarial protocol gaps (cad3deb)
 
+### Chore
+- invert the license tiers, FSL moves from core to services (14d7fec)
+
 ### Documentation
+- regenerate from conventional commits (2741000)
 - regenerate from conventional commits (b96e019)
 - regenerate from conventional commits (330c8c6)
 - regenerate from conventional commits (096180b)

@@ -5,6 +5,8 @@ git-cliff. Do not edit by hand.
 ## Unreleased
 
 ### Bug Fixes
+- per-mirror repository, and retryable release artifacts (bf04449)
+- declare Apache-2.0 on the non-core packages (a9c580f)
 - use-after-free-safe teardown across go/python/node (+ elixir safety test) (#134) (42a4a2e)
 
 ### CI
@@ -16,6 +18,7 @@ git-cliff. Do not edit by hand.
 - drop the root license, license per-component (FSL-1.1-ALv2) (#146) (be2a5a7)
 
 ### Documentation
+- regenerate from conventional commits (2741000)
 - regenerate from conventional commits (b96e019)
 - regenerate from conventional commits (330c8c6)
 - regenerate from conventional commits (096180b)
