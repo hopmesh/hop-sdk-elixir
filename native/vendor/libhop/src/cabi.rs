@@ -2472,4 +2472,51 @@ mod tests {
             hop_node_free(node);
         }
     }
+
+    #[test]
+    fn an_onion_relay_survives_the_abi_round_trip_and_fails_over() {
+        // A v3 onion dial string is ~70 chars, roughly three times a short `wss://` one, and it
+        // crosses the ABI through a caller-sized buffer. So the risk Tor adds at THIS seam is not
+        // policy (the pool is transport-blind, see hop-core relay_pool tests) but truncation: a
+        // host that sized its buffer for clearnet would silently dial a chopped hostname.
+        unsafe {
+            let node = hop_node_new();
+            hop_node_tick(node, 1_000);
+
+            let onion = std::ffi::CString::new(
+                "ws://i3azam4xowcraffcdopctb4uq7wq23uhi3azam4xowcraffcdopctb4d.onion/_hop",
+            )
+            .unwrap();
+            let clearnet = std::ffi::CString::new("wss://relay.example/_hop").unwrap();
+            assert!(hop_relay_add(node, onion.as_ptr(), true));
+            assert!(hop_relay_add(node, clearnet.as_ptr(), true));
+
+            let mut avail = 0usize;
+            assert_eq!(hop_relay_pool_size(node, &mut avail), 2);
+            assert_eq!(avail, 2);
+
+            // Round trip: what comes back must be the FULL onion URL, byte for byte.
+            hop_relay_report(node, clearnet.as_ptr(), false);
+            hop_relay_report(node, clearnet.as_ptr(), false);
+            let mut buf = [0i8; 256];
+            let n = hop_relay_next(node, buf.as_mut_ptr(), buf.len());
+            let got = CStr::from_ptr(buf.as_ptr()).to_str().unwrap();
+            assert_eq!(n, onion.as_bytes().len());
+            assert_eq!(
+                got,
+                onion.to_str().unwrap(),
+                "a blocked clearnet relay fails over to the onion endpoint, untruncated"
+            );
+
+            // A buffer too small must refuse rather than hand back a truncated hostname.
+            let mut small = [0i8; 16];
+            assert_eq!(
+                hop_relay_next(node, small.as_mut_ptr(), small.len()),
+                0,
+                "an undersized buffer yields nothing, never a partial URL"
+            );
+
+            hop_node_free(node);
+        }
+    }
 }
