@@ -21,6 +21,7 @@ git-cliff. Do not edit by hand.
 - land the grouped rust-dependencies bump (sha2, ed25519/x25519-dalek, chacha20poly1305, snow, rusqlite, p256, uniffi, tungstenite) (#89) (2038ce9)
 
 ### Documentation
+- regenerate from conventional commits (7a81fb6)
 - regenerate from conventional commits (e6b97f2)
 - regenerate from conventional commits (2741000)
 - regenerate from conventional commits (b96e019)
@@ -42,6 +43,7 @@ git-cliff. Do not edit by hand.
 - self-certifying reachability records (core + ABI) for DNS-free endpoint discovery (#126) (7c31123)
 
 ### Other
+- prove .onion relays flow through the pool, and add an Apple SOCKS hook (8a0d9f3)
 - wire the relay pool end to end, and stop the wire guard false-firing (35946e0)
 - one-time prekeys for async first contact (wire v11) (d6ebce3)
 - CLA gate on contributions (preserve commercial relicensing of core) (5a9aa7d)
