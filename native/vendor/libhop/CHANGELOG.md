@@ -21,6 +21,7 @@ git-cliff. Do not edit by hand.
 - land the grouped rust-dependencies bump (sha2, ed25519/x25519-dalek, chacha20poly1305, snow, rusqlite, p256, uniffi, tungstenite) (#89) (2038ce9)
 
 ### Documentation
+- regenerate from conventional commits (3b47a5f)
 - regenerate from conventional commits (ffb2acb)
 - regenerate from conventional commits (e19ed95)
 - regenerate from conventional commits (7a81fb6)
@@ -46,6 +47,7 @@ git-cliff. Do not edit by hand.
 
 ### Other
 - prove .onion relays flow through the pool, and add an Apple SOCKS hook (8a0d9f3)
+- bind the relay pool in every C-ABI wrapper, and make the ABI guard cover all twelve declarations (PLAT-003, PLAT-004) (ab53d1a)
 - wire the relay pool end to end, and stop the wire guard false-firing (35946e0)
 - one-time prekeys for async first contact (wire v11) (d6ebce3)
 - CLA gate on contributions (preserve commercial relicensing of core) (5a9aa7d)
