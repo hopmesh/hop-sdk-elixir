@@ -23,9 +23,16 @@
 // *ABI* version and is independent of the *wire* format version (bundle.rs `BUNDLE_VERSION`).
 //
 // v4 -> v5: added the §19 relay-pool calls (`hop_relay_add`, `hop_relay_next`,
-// `hop_relay_report`, `hop_relay_pool_size`). Additive, so a v4 caller still links, but the bump
-// is what lets a wrapper assert it can actually reach failover instead of silently dialing one
-// hardcoded URL forever.
+// `hop_relay_report`, `hop_relay_pool_size`). Additive, so a v4 caller still links; what the bump
+// buys is that a wrapper which binds those four calls cannot be paired at runtime with a v4
+// library that does not export them, because the load-time assertion is `==`.
+//
+// PLAT-003: this note used to say the bump "is what lets a wrapper assert it can actually reach
+// failover", which was false of every wrapper for as long as it stood. A version integer confers
+// no capability; binding the symbols does, and no C-ABI wrapper bound them. The functions named
+// in a bump note are now MACHINE-CHECKED against every wrapper pinned to that version by
+// tools/codegen/check-abi-version.sh, so this paragraph can no longer describe a surface the
+// wrappers do not expose.
 #define HOP_ABI_VERSION 5
 
 // Which side opened a bearer link (the Noise role). Mirrors hop-core's internal `Role`.
