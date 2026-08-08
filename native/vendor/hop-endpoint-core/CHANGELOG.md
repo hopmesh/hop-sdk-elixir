@@ -11,6 +11,7 @@ git-cliff. Do not edit by hand.
 - invert the license tiers, FSL moves from core to services (14d7fec)
 
 ### Documentation
+- regenerate from conventional commits (910695c)
 - regenerate from conventional commits (7160289)
 - regenerate from conventional commits (3b47a5f)
 - regenerate from conventional commits (ffb2acb)
